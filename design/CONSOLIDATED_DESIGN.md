@@ -1,3 +1,6 @@
+> **Superseded by `design/MASTER_DESIGN.md` (2026-08-23).** Kept as the dated
+> source record that document was built from.
+
 # Consolidated design: research → learn → teach
 
 Created 2026-08-23. Single place for the design threads that were scattered across
