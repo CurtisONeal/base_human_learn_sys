@@ -141,3 +141,64 @@ def test_probe_never_overrides_the_operator_budget(clean_settings):
     P.apply_paid_only(P.PROFILES["talking_head"])
     assert settings.vlm_max_frames == 2                 # budget untouched
     assert settings.vlm_escalate_below_words == 0       # nothing qualifies
+
+
+# --- Domains: subject axis, separate from visual shape ---
+
+def test_domain_library_loads_from_yaml():
+    """YAML in configuration, dict in code — add a domain without touching Python."""
+    from video2mdnotes.core import domains as D
+    D.load_domains("""
+aikido:
+  why: "reasoned, not measured"
+  prompt: generic.md
+  detect_terms: [uke, nage, tenkan, dojo, shihonage]
+""")
+    assert "aikido" in D.DOMAINS
+    assert D.DOMAINS["aikido"].detect_terms[0] == "uke"
+
+
+def test_domain_with_missing_prompt_is_skipped_not_fatal():
+    """A typo in config must not take down a run that would summarize fine."""
+    from video2mdnotes.core import domains as D
+    D.load_domains("bogus:\n  prompt: does_not_exist.md\n")
+    assert "bogus" not in D.DOMAINS
+
+
+def test_domain_probe_needs_distinct_terms_not_repetition():
+    """One word repeated is what a video *about* a term looks like, not a video
+    *in* that domain."""
+    from video2mdnotes.core import domains as D
+    D.load_domains("""
+aikido:
+  prompt: generic.md
+  detect_terms: [uke, nage, tenkan, dojo, shihonage]
+""")
+    assert D.classify_by_text("uke uke uke uke uke uke uke uke") is None
+    assert D.classify_by_text(
+        "the uke grabs and nage applies tenkan then shihonage in the dojo"
+    ) == "aikido"
+
+
+def test_domain_probe_declines_on_unrelated_text():
+    from video2mdnotes.core import domains as D
+    assert D.classify_by_text("we call the API and inspect the JSON response") is None
+
+
+def test_generic_is_never_auto_detected():
+    """It is the fallback, not something to match against."""
+    from video2mdnotes.core import domains as D
+    assert D.DOMAINS["generic"].detect_terms == []
+
+
+# --- Burned-in subtitles ---
+
+def test_burned_in_subtitles_are_recognised():
+    """Shorts burn captions into pixels; OCR then duplicates the transcript and
+    makes a wordless clip look text-rich. Measured on an Aikido Short."""
+    from video2mdnotes.core.visuals import looks_like_burned_in_subtitles as f
+    spoken = "I'm on the katatedori even if I'm in front of him and we pivot"
+    assert f("IF I'M ON THE KATATEDORI", spoken) is True
+    assert f("Collections Environments Flows POST gemma-7b-it", spoken) is False
+    assert f("IF", spoken) is False          # too short to judge
+    assert f("anything at all here", "") is False   # no transcript to compare

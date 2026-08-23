@@ -121,6 +121,19 @@ class Settings(BaseSettings):
     profile_probe_dense_words: int = 60   # >= this median -> screencast/UI
     profile_probe_sparse_words: int = 20  # >= this median -> lecture
 
+    # Subject domains (summarizer prompt selection). See core/domains.py.
+    # YAML in configuration, a dict in code — add a domain without touching
+    # Python, and everything downstream still gets a typed, testable object.
+    domain_library: str = ""
+    domain_source_map: str = ""
+    default_domain: str = "generic"
+    domain_probe: bool = True
+    domain_probe_min_distinct_terms: int = 3
+    domain_probe_min_rate: float = 1.0
+    domain_probe_margin: float = 2.0
+    # None means "resolve from the domain"; an explicit PROMPT_FILE still wins.
+    prompt_file_override: Path | None = None
+
     # Visual Content Extraction (off by default — the VLM tier costs money)
     #
     # Some instructional video carries its substance on screen, not in the
@@ -153,6 +166,10 @@ class Settings(BaseSettings):
     # featureless input rather than declining. Measured separation: a
     # hallucinated flash frame scored 21.9, real content scored 38.2+.
     frame_blank_min_contrast: float = 30.0
+    # A frame whose OCR overlaps the transcript this much is treated as
+    # burned-in subtitles rather than on-screen content.
+    subtitle_overlap: float = 0.6
+    subtitle_min_words: int = 3
     frame_video_height: int = 720
     frame_extract_timeout: int = 600
     ffmpeg_path: str = "ffmpeg"

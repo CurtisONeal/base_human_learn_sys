@@ -110,7 +110,7 @@ PROFILES: Dict[str, Profile] = {
 }
 
 
-def parse_source_map(raw: str) -> List[tuple]:
+def parse_source_map(raw: str, valid: Optional[Dict] = None) -> List[tuple]:
     """Parse "substring=profile,substring=profile" into ordered pairs.
 
     Ordered rather than a dict so the first match wins predictably, and
@@ -122,7 +122,7 @@ def parse_source_map(raw: str) -> List[tuple]:
         if "=" in chunk:
             needle, _, name = chunk.partition("=")
             needle, name = needle.strip().lower(), name.strip().lower()
-            if needle and name in PROFILES:
+            if needle and name in (PROFILES if valid is None else valid):
                 pairs.append((needle, name))
     return pairs
 

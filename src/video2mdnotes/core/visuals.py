@@ -105,6 +105,29 @@ def ocr_image(image_path: Path) -> str:
     return "\n".join(line for line in lines if line)
 
 
+def looks_like_burned_in_subtitles(ocr_text: str, transcript_text: str) -> bool:
+    """True when a frame's OCR is just the spoken words rendered into the video.
+
+    Shorts and social clips burn subtitles into the pixels because they autoplay
+    muted. That breaks two things at once: the domain/visual probe reads OCR
+    yield, so a wordless demonstration looks text-rich (measured — an Aikido
+    Short classified as 'animated' on the strength of its own subtitles), and
+    the notes end up carrying the same sentence twice, once from the transcript
+    and once as "on screen".
+
+    The discriminator is free because both strings are already in memory: high
+    overlap with the transcript means subtitles, low overlap means real
+    on-screen content worth keeping.
+    """
+    words = set(_WORD.findall((ocr_text or "").lower()))
+    if len(words) < settings.subtitle_min_words:
+        return False
+    spoken = set(_WORD.findall((transcript_text or "").lower()))
+    if not spoken:
+        return False
+    return len(words & spoken) / len(words) >= settings.subtitle_overlap
+
+
 def is_low_information(image_path: Path) -> bool:
     """True when a frame is too featureless to be worth describing.
 
@@ -212,6 +235,22 @@ def read_frames(
 
     # Pass 1: OCR everything (free) and apply the eligibility gate.
     ocr_texts = [ocr_image(f.path) if have_ocr else "" for f in frames]
+
+    # Discard OCR that is merely the burned-in subtitles of what was said. Done
+    # before the probe reads these yields, since otherwise a wordless clip
+    # classifies on the strength of its own captions.
+    spoken = " ".join((seg.text or "") for seg in (segments or []))
+    if spoken:
+        subtitle_hits = 0
+        for i, text in enumerate(ocr_texts):
+            if looks_like_burned_in_subtitles(text, spoken):
+                ocr_texts[i] = ""
+                subtitle_hits += 1
+        if subtitle_hits:
+            logger.info(
+                f"Discarded burned-in subtitles on {subtitle_hits} frame(s) — "
+                f"they duplicate the transcript and skew content classification."
+            )
     eligible = [
         settings.vlm_enabled and needs_vision_model(text) for text in ocr_texts
     ]
