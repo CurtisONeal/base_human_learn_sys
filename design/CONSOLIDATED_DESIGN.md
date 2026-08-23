@@ -17,6 +17,65 @@ Claude chat (cloud-only), Codex handoffs, an installed skill, and this repo.
 
 ---
 
+## The Collector (from the hand-drawn diagram, 2026-01-14)
+
+Source: `__assets/images/everything2mdnotes_video2notes_20260114_media_to_mdnotes_Page_1.png`
+in the Obsidian vault (laptop). Referenced as `everything2mdnotes`.
+
+**This is the clearest statement of the capture component, and it predates the phase
+plan by six months.** It shows two source families converging on one text pipeline:
+
+```
+MEDIA FAMILY                                    needs: audio -> transcript
+  youtube ─────────────┐
+  paywall videos ──────┤ = "streaming bits"
+  meeting audio ───────┤ -> .ast
+  DVD video ───────────┼─> physical reader -> folder structure -> file transfer
+                       │   (also: "streaming?")
+  audiobook? ──────────┘ -> "file type?"
+                             │
+                             v
+        downloads audio on all playlists -> transcribes off-machine LLM -> SUMMARIZES
+
+DOCUMENT FAMILY                                 needs: text extraction only
+  epub ────┬─> "in web" / "on comp" ─┐
+  pdf ─────┤                          ├─> extractor -> TEXT EXTRACTOR
+  docx ────┤                          │
+  md ──────┘                          │
+  html ──> BeautifulSoup -> cleanup ──┘
+```
+
+### What this settles
+
+1. **The component is "the Collector", not "video2notes".** Video is one input among
+   eight-plus. The name `everything2mdnotes` is the intent; `video2mdnotes` was the first
+   vertical slice.
+2. **Two families, not one pipeline.** Media needs an *audio→transcript* stage that
+   documents skip entirely. Both then converge on the same summarizer. That convergence
+   point is precisely the Phase 1 seam.
+3. **Sources in the diagram that appear in no handoff and no code:** DVD (with a *physical
+   reader* step and folder-structure handling), meeting audio, audiobooks, docx, html.
+   Paywall video is drawn as "streaming bits" — the Udemy problem, acknowledged in the
+   original design rather than discovered later.
+4. **"Transcribes off machine LLM"** — the diagram already assumed transcription might be
+   remote. Current implementation is local faster-whisper, which is a *stricter* choice
+   (free, offline) and worth keeping, but the design anticipated both.
+
+### Diagram vs. what exists today
+
+| Diagram element | Status |
+| --- | --- |
+| youtube -> audio -> transcript -> summary | ✅ built |
+| playlists | ✅ built |
+| paywall / streaming bits | ⚠️ partial — page-embed scrape reaches public embeds only; login-gated is deliberately not circumvented |
+| pdf / epub / docx / md / html -> text extractor | ❌ none built. **This is the Phase 1 gap.** |
+| meeting audio, audiobook, DVD | ❌ none built |
+| BeautifulSoup + cleanup for html | ❌ not built (embed scraping is regex over raw HTML, not content extraction) |
+
+The document family is the cheaper half — no download, no transcription, no visual layer —
+and it is entirely unbuilt. That is a strong argument for it as the MVP slice: it proves
+the source-agnostic seam with the least machinery.
+
 ## The classification that matters
 
 The organising question is not "what features do we want" but **what is a component
