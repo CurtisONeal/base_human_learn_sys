@@ -32,8 +32,17 @@ class Keyframe(BaseModel):
 
     @property
     def label(self) -> str:
-        """Human/filename-friendly position, e.g. '3m07s'."""
-        return f"{int(self.timestamp) // 60}m{int(self.timestamp) % 60:02d}s"
+        """Human-friendly position, e.g. '3m07s' or '0m04.5s'.
+
+        Sub-second precision appears only when the fractional part is
+        significant, because scene detection can emit several genuinely
+        different frames inside one second during a cut or flash — labelling
+        them all '0m04s' makes distinct entries look like duplicates.
+        """
+        minutes, seconds = int(self.timestamp) // 60, self.timestamp % 60
+        if abs(seconds - round(seconds)) < 0.05:
+            return f"{minutes}m{int(round(seconds)):02d}s"
+        return f"{minutes}m{seconds:04.1f}s"
 
 
 # ffmpeg writes `pts_time:12.345` lines to stderr for each selected frame when
@@ -107,19 +116,37 @@ def deduplicate(frames: List[Keyframe], hamming_threshold: Optional[int] = None)
     also collapses the common "flip back to the earlier diagram" pattern.
     """
     threshold = hamming_threshold if hamming_threshold is not None else settings.frame_dedupe_threshold
-    if threshold <= 0 or len(frames) < 2:
+    if len(frames) < 2:
         return frames
 
+    # Burst suppression and perceptual de-duplication are independent: turning
+    # off hash matching (threshold 0) must not also disable the time gap, and a
+    # missing imagehash must not disable it either.
     try:
         import imagehash
         from PIL import Image
+        hashing = threshold > 0
     except ImportError:
-        logger.warning("imagehash/Pillow not installed — skipping frame de-duplication.")
-        return frames
+        logger.warning("imagehash/Pillow not installed — perceptual de-duplication skipped.")
+        hashing = False
 
     kept: List[Keyframe] = []
     hashes: List["imagehash.ImageHash"] = []
+    min_gap = settings.frame_min_gap_seconds
     for frame in frames:
+        # Burst suppression. A cut or flash can emit several frames inside a
+        # fraction of a second; measured on an 81s video, six frames landed
+        # between 4.500s and 4.700s and every one was escalated to the paid
+        # vision model. Perceptual hashing does not collapse them because a
+        # white flash genuinely differs from the content on either side, so the
+        # gap has to be enforced in time rather than in image space.
+        if min_gap > 0 and kept and (frame.timestamp - kept[-1].timestamp) < min_gap:
+            frame.path.unlink(missing_ok=True)
+            continue
+        if not hashing:
+            kept.append(frame)
+            continue
+
         try:
             with Image.open(frame.path) as image:
                 digest = imagehash.phash(image)

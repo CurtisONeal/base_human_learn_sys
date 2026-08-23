@@ -105,6 +105,44 @@ def ocr_image(image_path: Path) -> str:
     return "\n".join(line for line in lines if line)
 
 
+def is_low_information(image_path: Path) -> bool:
+    """True when a frame is too featureless to be worth describing.
+
+    Transition and flash frames are near-uniform: a blown-out white field, a
+    fade to black. Sending one to a vision model does not yield "NO CONTENT" —
+    measured on an Aikido demonstration, a washed-out frame was confidently
+    described as "white athletic shoes or sneakers arranged on a white
+    surface". There are no shoes. The model confabulates from noise rather than
+    declining, so the frame has to be filtered before the call, not after.
+
+    Free to compute, and it runs before the only per-frame cost in the pipeline.
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        return False
+    try:
+        with Image.open(image_path) as image:
+            small = image.convert("L").resize((64, 64))
+            pixels = list(small.getdata())
+    except Exception:  # noqa: BLE001 - an unreadable frame is handled elsewhere
+        return False
+
+    if not pixels:
+        return True
+
+    # Contrast, not brightness. A featureless frame has little variation
+    # regardless of whether it is a blown-out white flash or a fade to black,
+    # so standard deviation separates them where a brightness threshold would
+    # catch only one. Measured on the Aikido demonstration: the frame that was
+    # confabulated into "white athletic shoes" scored 21.9, while every frame
+    # carrying real content scored 38.2 or above — a clean margin either side
+    # of the default.
+    mean = sum(pixels) / len(pixels)
+    variance = sum((v - mean) ** 2 for v in pixels) / len(pixels)
+    return (variance ** 0.5) < settings.frame_blank_min_contrast
+
+
 def needs_vision_model(ocr_text: str) -> bool:
     """True when OCR alone probably didn't capture what the frame conveys.
 
@@ -215,6 +253,14 @@ def read_frames(
         )
 
         if frame.path in chosen:
+            if is_low_information(frame.path):
+                logger.info(
+                    f"Skipping near-blank frame at {frame.label} — a vision "
+                    f"model confabulates on featureless input rather than "
+                    f"declining."
+                )
+                readings.append(reading)
+                continue
             description = describe_image(frame.path)
             if description:
                 reading.description = description

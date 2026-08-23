@@ -144,6 +144,15 @@ class Settings(BaseSettings):
     # Perceptual-hash distance below which two frames count as the same slide.
     # Screencasts over-fire scene detection on cursor movement and typing.
     frame_dedupe_threshold: int = 6
+    # Minimum seconds between kept keyframes. A cut or flash can emit several
+    # frames inside a fraction of a second; perceptual hashing keeps them
+    # because they genuinely differ, so the gap is enforced in time instead.
+    frame_min_gap_seconds: float = 1.0
+    # Frames with less greyscale contrast than this are treated as blank
+    # transition frames and never sent to the vision model — it confabulates on
+    # featureless input rather than declining. Measured separation: a
+    # hallucinated flash frame scored 21.9, real content scored 38.2+.
+    frame_blank_min_contrast: float = 30.0
     frame_video_height: int = 720
     frame_extract_timeout: int = 600
     ffmpeg_path: str = "ffmpeg"

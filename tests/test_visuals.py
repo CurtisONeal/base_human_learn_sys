@@ -246,3 +246,45 @@ def test_transcript_survives_a_summarizer_failure(tmp_path, monkeypatch):
     assert "real words here" in written[0].read_text()
     # And the run is still correctly not treated as complete.
     assert not list(tmp_path.glob("*/summaries/*.md"))
+
+
+def test_blank_transition_frames_never_reach_the_vision_model(tmp_path):
+    """A vision model confabulates on featureless input rather than declining.
+
+    Measured on an Aikido demonstration: a blown-out white transition frame was
+    confidently described as "white athletic shoes or sneakers arranged on a
+    white surface". There were no shoes. Filtering has to happen before the
+    call, since the model will not decline on its own.
+    """
+    from PIL import Image
+    from video2mdnotes.core.visuals import is_low_information
+
+    blank = tmp_path / "blank.png"
+    Image.new("RGB", (64, 64), (250, 250, 250)).save(blank)
+    assert is_low_information(blank) is True
+
+    # A frame with real content must not be filtered.
+    import random
+    random.seed(0)
+    busy = tmp_path / "busy.png"
+    img = Image.new("RGB", (64, 64))
+    img.putdata([(random.randint(0, 255),) * 3 for _ in range(64 * 64)])
+    img.save(busy)
+    assert is_low_information(busy) is False
+
+
+def test_burst_frames_are_suppressed_by_time_gap(tmp_path):
+    """Six frames landed between 4.500s and 4.700s on a real 81-second video and
+    every one was escalated. Perceptual hashing keeps them because a flash
+    genuinely differs from its neighbours, so the gap is enforced in time."""
+    from PIL import Image
+    from video2mdnotes.core.frames import Keyframe, deduplicate
+
+    frames = []
+    for i, ts in enumerate([4.5, 4.533, 4.567, 4.633, 62.4]):
+        p = tmp_path / f"f{i}.png"
+        Image.new("RGB", (32, 32), (i * 40 % 255, 90, 200)).save(p)
+        frames.append(Keyframe(path=p, timestamp=ts))
+
+    kept = deduplicate(frames, hamming_threshold=0)
+    assert [round(k.timestamp, 1) for k in kept] == [4.5, 62.4]
