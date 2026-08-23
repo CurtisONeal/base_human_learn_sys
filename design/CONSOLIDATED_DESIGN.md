@@ -113,8 +113,58 @@ learning.** Two consequences:
 2. It can *also* be the first move of a learning spike. Same output, two consumers.
 
 That means the seam between "capture + summarise" and "learn" is a **handoff of
-artifacts**, not a pipeline stage. The learning layer reads notes; it does not reach
-back into extraction.
+artifacts**, not a pipeline stage.
+
+**But the flow is a loop, not a line.** An earlier version of this document claimed the
+learning layer "never reaches back into extraction." That was wrong, and it conflated two
+different things:
+
+| | Correct? |
+| --- | --- |
+| Learning must not depend on extraction *internals* (yt-dlp shapes, frame paths, OCR) | ✅ yes — that is the decoupling worth keeping |
+| Learning must not *cause* more research | ❌ **no** — teaching is precisely where gaps surface |
+
+Trying to teach something is the activity that exposes what a source never covered. A
+teach-back stage that hits "I cannot explain this because the notes do not say" has
+discovered a real research need, and swallowing that is a design failure.
+
+**The resolution keeps both properties: the learning layer does not *call* extraction, it
+*emits a research request* that the Collector consumes as an ordinary input.** A new job in
+the queue, not a reach-back through the stack. Decoupling preserved, feedback enabled.
+
+```
+Collector -> notes -> Learning/Teach-back
+    ^                      |
+    |                      v
+    +---- research request (a new artifact, queued like any source URL)
+```
+
+Note this is the **same shape as the voice-chat-to-program-design thread**: a durable
+artifact lands in a queue that a worker polls. Gap-flags are that pattern applied to
+research rather than to code. The two threads stay separate in purpose but share this
+mechanism — worth knowing before either builds its own bespoke queue.
+
+### Gap kinds worth distinguishing
+
+Not every gap should spawn the same thing:
+
+| Gap | Surfaces during | Right response |
+| --- | --- | --- |
+| **Coverage** — the source never addressed it | notes quality check | research request: find a source that does |
+| **Comprehension** — notes cover it but cannot be explained from them | teach-back | research request: find a *better/different* source |
+| **Best practice** — the source teaches something outdated or contradicted | notes quality check, or a later source disagreeing | **flag, do not silently resolve** — a human decides which is right |
+| **Vocabulary** — a term is used but never defined | glossary extraction | look it up; check Obsidian first (the source pass) |
+| **Prerequisite** — depends on something not yet learned | scaffolding (Phase 2.5) | order the material, or spawn a prerequisite spike |
+
+The best-practice case is the one Curtis raised and the one that most needs care: two
+sources disagreeing is *information*, not an error to auto-resolve. The system should
+surface the conflict with both citations, not pick a winner — the same discipline as
+ADR-035's rule to write `- None` rather than invent, and ADR-037's insistence that
+verified and unverified claims stay distinguishable.
+
+This also means **research/collection has two entry points**, not one: a human saying "go
+look at this", and a learning stage saying "we need this". Same component, same output,
+two callers — which is further evidence it is a component rather than a stage.
 
 ---
 
