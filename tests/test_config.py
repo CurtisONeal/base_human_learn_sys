@@ -3,7 +3,7 @@ from video2mdnotes.config import settings
 def test_settings_load_defaults():
     """Verify that settings load with expected default values."""
     assert settings.llm_provider == "openai"
-    assert settings.fw_model == "medium"
+    assert settings.fw_model == "large-v3"
     assert settings.fw_lang == "en"
 
 def test_paths_exist():

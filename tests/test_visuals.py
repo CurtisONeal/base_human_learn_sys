@@ -239,7 +239,7 @@ def test_transcript_survives_a_summarizer_failure(tmp_path, monkeypatch):
          patch("video2mdnotes.main.transcribe_audio", return_value=tr), \
          patch("video2mdnotes.main.generate_summary",
                side_effect=RuntimeError("provider exploded")):
-        CliRunner().invoke(app, ["https://example/v"])
+        CliRunner().invoke(app, ["process", "https://example/v"])
 
     written = list(tmp_path.glob("*/transcripts/*.md"))
     assert written, "transcript was lost when summarization failed"

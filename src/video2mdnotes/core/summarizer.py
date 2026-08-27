@@ -222,7 +222,30 @@ def generate_summary(transcript: TranscriptResult) -> SummaryResult:
     # 2. Prepare the user message (the full transcript)
     user_message = transcript.markdown_content
 
-    # 3. Walk the failover chain in order, falling back on failure.
+    llm_output, model = complete_with_failover(system_prompt, user_message)
+
+    # Append the full transcript (raw full_text, no timestamps) to the summary.
+    return SummaryResult(
+        source_file=transcript.source_file,
+        model_name=model,
+        summary_text=f"{llm_output}\n\n## Transcript\n{transcript.full_text}",
+        generated_at=dt.datetime.now(),
+    )
+
+
+def complete_with_failover(system_prompt: str, user_message: str) -> tuple[str, str]:
+    """Run one completion through the failover chain. Returns (output, model).
+
+    Factored out of `generate_summary` so book chunking can reuse the exact
+    same exhaustion and no-surprise-spend behaviour. A second copy of this loop
+    is precisely the kind of thing that would grow its own subtly different
+    escalation policy — and the policy here is the one that keeps an unattended
+    overnight run from quietly starting to spend money.
+
+    Raises:
+        SubscriptionExhausted: re-raised so the caller can wait and retry.
+        RuntimeError: every configured provider failed.
+    """
     errors: list[str] = []
     exhausted = False
     exhaustion: SubscriptionExhausted | None = None
@@ -244,9 +267,21 @@ def generate_summary(transcript: TranscriptResult) -> SummaryResult:
         try:
             if model.startswith(CLAUDE_CLI_PREFIX):
                 # Subscription CLI: authenticates from the keychain, no API key.
-                llm_output = _complete_claude_cli(
-                    model, settings.prompt_file, user_message
-                )
+                # The CLI takes a system prompt as a *file*, so the caller's
+                # prompt is written to one. Passing settings.prompt_file
+                # directly would silently ignore the argument — which is
+                # exactly what happened when book chunks were being summarized
+                # with the video prompt.
+                with tempfile.NamedTemporaryFile(
+                    "w", suffix=".txt", prefix="v2mdnotes-sys-",
+                    encoding="utf-8", delete=False,
+                ) as handle:
+                    handle.write(system_prompt)
+                    prompt_path = Path(handle.name)
+                try:
+                    llm_output = _complete_claude_cli(model, prompt_path, user_message)
+                finally:
+                    prompt_path.unlink(missing_ok=True)
             elif provider in LOCAL_PROVIDERS:
                 # Local models need no key, so nothing except this gate stops a
                 # chain from silently falling through to a much weaker model.
@@ -275,14 +310,7 @@ def generate_summary(transcript: TranscriptResult) -> SummaryResult:
             print(f"Summarizer: {model} failed ({e}); trying next provider if any.")
             continue
 
-        # Append the full transcript (raw full_text, no timestamps) to the summary.
-        final_summary_text = f"{llm_output}\n\n## Transcript\n{transcript.full_text}"
-        return SummaryResult(
-            source_file=transcript.source_file,
-            model_name=model,
-            summary_text=final_summary_text,
-            generated_at=dt.datetime.now(),
-        )
+        return llm_output, model
 
     # Exhaustion is re-raised as itself so the caller can wait for the limit to
     # reset and retry this same video, rather than treating it as a dead run.
@@ -291,4 +319,236 @@ def generate_summary(transcript: TranscriptResult) -> SummaryResult:
 
     raise RuntimeError(
         "Summary generation failed for all configured providers: " + "; ".join(errors)
+    )
+
+
+# --- Documents ------------------------------------------------------------
+
+# "Preserve code exactly" was too weak: measured on llmops, 140 fenced blocks
+# went in and ZERO came out — the model described the code in prose instead of
+# reproducing it. For a corpus that is mostly programming books, notes without
+# code are notes about a book you still have to open. The instruction now says
+# *copy*, not *preserve*, and says it twice.
+_CHUNK_SYSTEM = """You are summarizing ONE PASSAGE of a longer book.
+
+Rules:
+- Summarize only what this passage says. Do not infer what the rest of the book covers.
+- Every claim must carry a locator in brackets. Each section in the passage is
+  preceded by its own locator, e.g. [ch. 2 §Four Goals for LLMOps] or
+  [p. 214 §Indexing]. Use the locator of the SECTION the claim came from — NOT
+  the passage-span locator at the top. A bare chapter number is not good
+  enough: a reader must be able to find the claim without re-reading the
+  chapter.
+- If the passage is boilerplate (copyright, index, front matter), reply with exactly: SKIP
+
+CODE — this matters most:
+- The passage marks code with ``` fences. COPY every fenced block into your
+  output inside its own ``` fence, character for character. Do not paraphrase
+  it, do not describe it in prose, do not abbreviate it with "..." or comments
+  like "# rest of implementation".
+- Put one sentence before each block saying what it does, then the block.
+- If a block is longer than about 40 lines, copy the part the passage's own
+  discussion refers to and mark the omission explicitly.
+- Never invent an identifier, import, flag or API name that is not in the passage.
+"""
+
+# Passages combined per reduce call. Six keeps each call small enough to finish
+# inside the CLI timeout; a 16-passage reduce timed out at 900s and lost the
+# whole book's work.
+_REDUCE_BATCH = 6
+
+_REDUCE_SYSTEM = """You are assembling per-passage notes for one book into a single set of notes.
+
+Rules:
+- Work only from the notes given. Add nothing that is not in them.
+- Keep the locators. A reader must be able to find every claim in the book.
+- Merge duplicates; preserve disagreements rather than resolving them silently.
+- Structure: overview, then the main topics in the book's own order, then key terms.
+- CODE BLOCKS PASS THROUGH VERBATIM. Copy every ``` fenced block from the notes
+  into your output unchanged. Never summarize a code block into a sentence, and
+  never drop one because a nearby passage covers the same topic — the reduce is
+  where code silently disappears.
+- Output ONLY the notes document. No preamble, no commentary on the input, no
+  checklist of what you did, and no questions or offers of further work. The
+  first line of your reply is the first line of the document.
+- Be comprehensive. These notes replace the book for a reader who cannot open
+  it, so do not compress away detail to be concise.
+"""
+
+
+# A conversational opener ("I'll assemble these notes into…") is harmless when
+# a real document follows, and the good EPUB run began with exactly that. Only
+# the preamble is dropped, never the body.
+_CHAT_OPENER = re.compile(
+    r"^\s*(i'?ll\b|here'?s\b|sure[,!]|certainly[,!]|this is (excellent|great|good))",
+    re.IGNORECASE,
+)
+
+# Offers of further work only ever appear when the model thinks it is in a
+# conversation rather than producing an artifact.
+_CHAT_OFFER = re.compile(
+    r"\bdo you want me to\b|\bwould you like me to\b|\bonce you confirm\b|"
+    r"\bshall i\b|\blet me know if you\b",
+    re.IGNORECASE,
+)
+
+
+def _strip_chat_preamble(text: str) -> str:
+    """Drop a conversational lead-in that sits above the first heading."""
+    lines = (text or "").strip().splitlines()
+    first_heading = next(
+        (i for i, line in enumerate(lines) if line.lstrip().startswith("#")), None
+    )
+    if first_heading:
+        head = "\n".join(lines[:first_heading])
+        if _CHAT_OPENER.search(head) and len(head.split()) < 80:
+            return "\n".join(lines[first_heading:]).strip()
+    return (text or "").strip()
+
+
+def _reduce_collapsed(final: str, passage_notes: list) -> bool:
+    """Whether the reduce returned chat or a fragment instead of the notes.
+
+    Judged by PROPORTION, not phrasing. Wording is a poor signal — the run that
+    produced a genuinely good 15,247-word document opened with "I'll assemble
+    these chapter notes…", which any phrase-matching guard flags. Size relative
+    to the input cannot be faked: a reduce of 16 passages that returns 177 words
+    has lost the book regardless of how it is worded.
+    """
+    source_words = sum(len(n.split()) for n in passage_notes)
+    final_words = len(final.split())
+    if final_words < 300 and source_words > 1_000:
+        return True
+    if source_words and final_words < source_words * 0.10:
+        return True
+    return bool(_CHAT_OFFER.search(final)) and final_words < source_words * 0.35
+
+
+def summarize_document(source, max_words: int = None, progress=None) -> SummaryResult:
+    """Summarize a book-length `SourceText` by map-reduce over its chunks.
+
+    Chunks are summarized independently and then reduced, because no useful
+    model reads 136,000 words in one request. Two properties are load-bearing:
+
+    * **Locators survive the reduce.** Each chunk carries exactly one chapter
+      or page reference, so a claim in the final notes can be traced to a place
+      in the book. A summary of a book you cannot check is worth very little.
+    * **Exhaustion stops the whole document, not one chunk.** A book that is
+      half summarized because the subscription ran out mid-way would look
+      complete while silently omitting later chapters. The exception propagates
+      so the caller can wait and resume.
+
+    The raw text is deliberately NOT appended the way a transcript is: book text
+    is copyrighted, and writing a whole book into an artifact that may land in a
+    vault or a repo is not something to do by default.
+    """
+    from video2mdnotes.core.chunking import chunk_sections
+
+    chunks = chunk_sections(source.sections, **(
+        {"max_words": max_words} if max_words else {}))
+    if not chunks:
+        return SummaryResult(
+            source_file=Path(source.origin), model_name="none",
+            summary_text=EMPTY_TRANSCRIPT_PLACEHOLDER,
+            generated_at=dt.datetime.now(),
+        )
+
+    notes: list[str] = []
+    models: set[str] = set()
+    for chunk in chunks:
+        if progress:
+            progress(chunk.index, chunk.total, chunk.locator)
+        header = (
+            f"Book: {source.title}\n"
+            f"Passage {chunk.index} of {chunk.total} — locator [{chunk.locator}]\n\n"
+        )
+        output, model = complete_with_failover(
+            _CHUNK_SYSTEM, header + chunk.to_prompt_text()
+        )
+        models.add(model)
+        if output.strip().upper() != "SKIP":
+            notes.append(f"### [{chunk.locator}] {' > '.join(chunk.heading_path)}\n{output.strip()}")
+
+    if not notes:
+        return SummaryResult(
+            source_file=Path(source.origin), model_name=", ".join(sorted(models)) or "none",
+            summary_text=EMPTY_TRANSCRIPT_PLACEHOLDER,
+            generated_at=dt.datetime.now(),
+        )
+
+    # The per-passage notes are the expensive part — one model call each, and
+    # for a book that is most of the run. Everything below is a *reduce* over
+    # them, and a reduce failure must never discard them. The media path already
+    # guarantees this for transcripts ("transcript survives a summarizer
+    # failure"); a book that cost 16 calls deserves the same.
+    passage_notes = list(notes)
+
+    def _fallback(reason: str) -> str:
+        return (
+            f"# {source.title} — passage notes\n\n"
+            f"> The per-passage notes below are complete. Combining them into a "
+            f"single summary failed: {reason}\n"
+            f"> Re-running will reuse nothing, so keep this file.\n\n"
+            + "\n\n".join(passage_notes)
+        )
+
+    # Reduce in exactly ONE round of batches, then CONCATENATE the results.
+    #
+    # Reducing recursively — summarizing summaries until one call can hold
+    # everything — is the obvious design and it fails twice over. It compounds
+    # loss at every round, and the second round hands the model text that is
+    # already assembled notes, which it reads as finished work: one real run
+    # returned "This is excellent work ✓ Locators preserved… Do you want me to
+    # merge Chapters 1–5?" — 177 words of chat in place of a book.
+    #
+    # Concatenation avoids both. Each batch covers a contiguous, ordered span of
+    # the book and keeps its own locators, so joining them is coherent without a
+    # second pass that can only lose detail.
+    try:
+        if len(notes) <= _REDUCE_BATCH:
+            final, model = complete_with_failover(
+                _REDUCE_SYSTEM, f"Book: {source.title}\n\n" + "\n\n".join(notes)
+            )
+            models.add(model)
+        else:
+            parts = []
+            for i in range(0, len(notes), _REDUCE_BATCH):
+                batch = notes[i:i + _REDUCE_BATCH]
+                output, model = complete_with_failover(
+                    _REDUCE_SYSTEM,
+                    f"Book: {source.title}\n"
+                    f"You are given passages {i + 1}-{i + len(batch)} of "
+                    f"{len(notes)}; another pass covers the rest. Do NOT title "
+                    f"the output after the passage numbers - that is internal "
+                    f"batching a reader should never see. Use the topics.\n\n"
+                    + "\n\n".join(batch),
+                )
+                models.add(model)
+                parts.append(output.strip())
+            final = _strip_chat_preamble("\n\n---\n\n".join(parts))
+
+        final = _strip_chat_preamble(final)
+        if _reduce_collapsed(final, passage_notes):
+            final = _fallback(
+                f"the reduce returned {len(final.split())} words from "
+                f"{sum(len(n.split()) for n in passage_notes)} words of passage "
+                f"notes — it chatted or truncated instead of assembling"
+            )
+    except SubscriptionExhausted:
+        raise
+    except Exception as exc:  # noqa: BLE001 - keep the work that succeeded
+        final = _fallback(str(exc)[:200])
+
+    provenance = (
+        f"\n\n---\nsource: {source.origin}\n"
+        f"provenance: {source.provenance}\n"
+        f"structure_is_inferred: {source.structure_is_inferred}\n"
+        f"passages: {len(chunks)}  words: {source.word_count:,}\n"
+        f"models: {', '.join(sorted(models))}\n"
+    )
+    return SummaryResult(
+        source_file=Path(source.origin),
+        model_name=", ".join(sorted(models)),
+        summary_text=final.strip() + provenance,
+        generated_at=dt.datetime.now(),
     )

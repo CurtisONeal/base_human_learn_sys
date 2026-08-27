@@ -124,6 +124,34 @@ def build_initial_prompt(title: str, tags: List[str], description: str = "") -> 
 
     return title
 
+def select_model(audio_path: Path, title: str = "", extra_metadata: str = "") -> tuple:
+    """Which Whisper model to use, and why. Free — metadata + one ffmpeg pass.
+
+    Returns (model_name, reason). Honours ASR_AUTO_SELECT=false and treats an
+    explicitly-set FW_MODEL as a pin, because someone who names a model means it.
+    """
+    from video2mdnotes.core.asr_select import (
+        ENGLISH_NOISY, MULTILINGUAL, choose_model,
+    )
+
+    if not getattr(settings, "asr_auto_select", True):
+        return settings.fw_model, "auto-select disabled (ASR_AUTO_SELECT=false)"
+
+    # Auto-select chooses BETWEEN large-v3 and distil-large-v3. Anything else in
+    # FW_MODEL is a deliberate pin and must be honoured — "tiny" in a test, or
+    # an operator who knows what they want. Overriding it made the test suite
+    # load a 3.1 GB model it had explicitly opted out of: 5 minutes became 39.
+    if settings.fw_model not in (MULTILINGUAL, ENGLISH_NOISY):
+        return settings.fw_model, f"pinned by FW_MODEL={settings.fw_model}"
+
+    choice = choose_model(
+        f"{title} {extra_metadata}",
+        audio_path,
+        noisy_threshold_db=getattr(settings, "asr_noisy_mean_db", -28.0),
+    )
+    return choice.model, choice.reason
+
+
 def transcribe_audio(audio_path: Path, title: str = "Unknown", initial_prompt: str = "") -> TranscriptResult:
     """
     Transcribes the given audio file using faster-whisper.
@@ -146,10 +174,13 @@ def transcribe_audio(audio_path: Path, title: str = "Unknown", initial_prompt: s
         TextColumn("[progress.description]{task.description}"),
         transient=True,
     ) as progress:
-        progress.add_task(description=f"Loading Whisper model ({settings.fw_model})...", total=None)
-        
+        chosen, why = select_model(audio_path, title, initial_prompt)
+        if chosen != settings.fw_model:
+            print(f"ASR model: {chosen} — {why}")
+        progress.add_task(description=f"Loading Whisper model ({chosen})...", total=None)
+
         model = WhisperModel(
-            settings.fw_model,
+            chosen,
             device="cpu", # Force CPU for now as per requirements (can be config'd later)
             compute_type=settings.fw_compute
         )
@@ -190,7 +221,7 @@ def transcribe_audio(audio_path: Path, title: str = "Unknown", initial_prompt: s
         source_file=audio_path.name,
         segments=segments_list,
         language=info.language,
-        model=settings.fw_model
+        model=chosen
     )
 
     return TranscriptResult(
@@ -199,6 +230,6 @@ def transcribe_audio(audio_path: Path, title: str = "Unknown", initial_prompt: s
         segments=segments_list,
         full_text=full_text,
         markdown_content=md_content,
-        model_name=settings.fw_model,
+        model_name=chosen,
         generated_at=dt.datetime.now()
     )

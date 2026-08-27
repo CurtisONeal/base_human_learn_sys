@@ -24,7 +24,7 @@ def test_full_pipeline_e2e_single_video(tmp_path):
 
     try:
         test_url = "https://www.youtube.com/watch?v=tPEE9ZwTmy0"
-        result = runner.invoke(app, [test_url])
+        result = runner.invoke(app, ["process", test_url])
         
         if result.exit_code != 0:
             print(f"CLI exited with code {result.exit_code}")
@@ -78,7 +78,7 @@ def test_full_pipeline_e2e_playlist(tmp_path):
     try:
         # A stable playlist created for testing (2 videos)
         test_url = "https://www.youtube.com/watch?v=7Gt-7U1ctao&list=PLirzgrJM69ktRZAjZufbrHk7hSVvpDyEV"
-        result = runner.invoke(app, [test_url])
+        result = runner.invoke(app, ["process", test_url])
         
         if result.exit_code != 0:
             print(f"CLI exited with code {result.exit_code}")

@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     claude_cli_path: str = "claude"
     # `claude -p` is an AGENT, not a completion endpoint: by default it can load
     # skills, search the web, and read files. Transcripts are untrusted
-    # third-party content, so tools are disabled — see readme.md.
+    # third-party content, so tools are disabled — see README.md.
     claude_cli_disallowed_tools: str = (
         "Skill,WebSearch,WebFetch,Read,Bash,Glob,Grep,Task,Agent,Edit,Write"
     )
@@ -178,7 +178,7 @@ class Settings(BaseSettings):
     #   "auto" -> macOS Vision framework when available, otherwise skip
     #   "none" -> disable OCR (every frame escalates to the vision model)
     # NOTE: local OCR is macOS-only. On Linux/Windows this degrades to
-    # vision-model-only, which is metered spend — see readme.md.
+    # vision-model-only, which is metered spend — see README.md.
     ocr_backend: str = "auto"
     ocr_min_confidence: float = 0.4
 
@@ -226,7 +226,33 @@ class Settings(BaseSettings):
     rank_final_dwell_clamp: float = 1.0
 
     # faster-whisper Configuration
-    fw_model: str = "medium"
+    # Measured on a 14-minute far-field recording (Downloads/20260820_191152.MOV,
+    # people talking across a room — close to worst case):
+    #
+    #   medium           63s   318 words   0 repeated 5-grams
+    #   large-v3        352s   473 words  10 repeated 5-grams  <- looping
+    #   distil-large-v3  78s   635 words   0 repeated 5-grams  <- best
+    #
+    # distil-large-v3 keeps large-v3's full 32-layer encoder (where acoustic
+    # robustness lives) and cuts the decoder to 2 layers, so it is nearly as
+    # fast as medium at the same ~1.5 GB while recovering twice the speech.
+    #
+    # distil-large-v3 IS ENGLISH-ONLY, so it cannot be the default: this corpus
+    # contains Aikido material and Japanese terminology, and an English-only
+    # model turns that into confident phonetic nonsense.
+    #
+    # The default is therefore multilingual, assuming close-mic speech.
+    # core/asr_select.py switches to distil-large-v3 automatically when the
+    # audio measures far-field AND no non-English signal is present. Setting
+    # FW_MODEL explicitly pins the model and disables that selection.
+    fw_model: str = "large-v3"
+
+    # Auto-select between large-v3 and distil-large-v3 from free signals
+    # (metadata vocabulary + one ffmpeg loudness pass). Off = always fw_model.
+    asr_auto_select: bool = True
+    # Mean programme level below which audio counts as far-field/noisy.
+    # Calibrated on ONE real sample (-33.0 dB); a starting point, not a tuned value.
+    asr_noisy_mean_db: float = -28.0
     fw_compute: str = "auto" # auto, int8, float16, int8_float16
     fw_lang: str = "en"
 
