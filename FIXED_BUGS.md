@@ -13,6 +13,162 @@ Newest first. Format: symptom → cause → fix → how we know.
 
 ---
 
+### Chapter-level locators were too coarse to check
+- **Symptom:** every claim in book notes cited `[ch. 1]`. On LLMOps that is 33
+  sections and 6,923 words, and the whole 259-section book collapsed to 15
+  distinct locators. A human checking one claim about open-source trade-offs
+  read through the vocabulary sections and never reached the passage — the
+  claim lived four subsections away under "The Big Debate".
+- **Cause:** `_locator_for()` extracted the full heading path and then returned
+  only the chapter number from it. The precision existed and was discarded.
+- **Fix:** locator carries the section: `[ch. 1 §The Big Debate: Open Source…]`.
+  PDF matches: `[p. 22 §Decoder-Only LLMs]`. 15 -> 249 distinct locators.
+- **Test:** covered by the document tests; verified against the real corpus.
+
+### A chunk locator named one section as though it were the whole span
+- **Symptom:** chunk spanning all of chapter 1 rendered as `[ch. 1 §References]`
+  — the LAST section only, reading as though the chunk were that section.
+- **Cause:** when the first section's locator had no `§title` the code fell back
+  to `first_title or last_title`, silently taking whichever existed.
+- **Fix:** section names appear only when BOTH ends are known; otherwise the
+  honest coarser `[ch. 1]`. A locator that points somewhere real but wrong is
+  worse than one that is merely vague.
+- **Test:** `test_chunk_locator_*` in tests/test_documents.py.
+
+### Auto model-select silently overrode an explicit FW_MODEL
+- **Symptom:** the full test suite went from 5 minutes to **39**. Tests that pin
+  `settings.fw_model = "tiny"` were loading 3.1 GB `large-v3`.
+- **Cause:** `select_model()` consulted the auto-selector unconditionally and
+  never looked at `settings.fw_model`. The docstring claimed an explicit
+  FW_MODEL pins the model; it did not.
+- **Fix:** auto-select chooses BETWEEN `large-v3` and `distil-large-v3` only.
+  Any other value is a deliberate pin and is honoured. Suite back to 4.8s.
+- **Test:** `test_an_explicit_fw_model_is_honoured_not_overridden`.
+
+### Variable shadowing broke PDF extraction outright
+- **Symptom:** `IndexError: string index out of range` on every PDF.
+- **Cause:** a new local `pages = f"p. {first}"` shadowed the enclosing `pages`
+  list of page texts, so `pages[p - 1]` indexed into a string.
+- **Fix:** renamed to `page_ref`, with a comment naming the hazard.
+- **Test:** caught immediately by running against the real corpus.
+
+### Book notes described code instead of reproducing it
+- **Symptom:** the EPUB extractor fed the model 140 fenced code blocks from
+  `llmops` and the notes came back with ZERO. The model wrote prose about the
+  code (72 inline spans) rather than copying it. For a corpus with 453,676 code
+  blocks, notes without code are notes about a book you still have to open.
+- **Cause:** the chunk prompt said "Preserve code, commands and API names
+  exactly". "Preserve" reads as "do not corrupt what you quote", not "quote it".
+- **Fix:** the instruction now says COPY, names the ``` fence explicitly,
+  forbids paraphrase/abbreviation/"# rest of implementation", and asks for one
+  sentence of context before each block. The reduce prompt gained a matching
+  rule, because the reduce is the other place code silently disappears.
+- **Test:** measured on the three code-densest llmops chunks — 120 blocks in,
+  **73 out** (was 0). Not 100%: the model still consolidates or drops some, so
+  this is an improvement, not a guarantee.
+
+### Recursive reduce turned a book into 177 words of chat
+- **Symptom:** `llmops.pdf` finished all 16 passages, then wrote a 177-word file
+  reading "This is excellent work… ✓ Locators preserved… Do you want me to merge
+  Chapters 1–5?" — the model reviewing its own input instead of assembling it.
+  The EPUB run of the same book produced 15,247 usable words.
+- **Cause:** batching to avoid a timeout introduced a *second* reduce round. Its
+  input was already-assembled notes, which the model read as finished work to
+  comment on. Recursive reduce also compounds detail loss at every round.
+- **Fix:** exactly ONE round of batched reduces (6 passages each), then
+  **concatenate** the batch outputs — each covers a contiguous, ordered span with
+  its own locators, so joining them needs no second pass. The reduce prompt now
+  forbids preamble, commentary and offers of further work.
+- **Test:** `test_conversational_reduce_output_is_rejected`,
+  `test_a_good_summary_with_a_chat_opener_is_kept_not_rejected`,
+  `test_reduce_that_returns_a_fragment_is_rejected_by_proportion`.
+
+### A phrase-matching quality guard rejected the best output produced
+- **Symptom:** the first guard written for the bug above flagged the *good*
+  15,247-word EPUB notes as conversational.
+- **Cause:** it matched wording. That document opens "I'll assemble these chapter
+  notes into a comprehensive single reference document" and is excellent. Opening
+  phrasing does not predict output quality.
+- **Fix:** judge by PROPORTION instead — a reduce returning under 10% of its
+  input, or under 300 words from a substantial book, has lost the content
+  whatever it says. A chat preamble above the first heading is now stripped
+  rather than treated as grounds for rejection.
+- **Test:** both real artifacts are asserted directly: the collapsed PDF output
+  is rejected, the good EPUB output passes.
+
+### A failed reduce discarded every passage of a book
+- **Symptom:** `llmops.pdf` summarized all 16 passages successfully, then the
+  single final reduce call timed out at 900s and the exception propagated. All
+  16 model calls — the entire cost of the run — were thrown away, and no file
+  was written.
+- **Cause:** batching only kicked in above 20,000 words of notes. 16 passages
+  came to roughly 16,000, so one reduce call received the lot. Worse, the reduce
+  had no failure path: the per-passage notes existed in memory and were dropped.
+- **Fix:** batch every 6 passages so no reduce call is large, and on any
+  non-exhaustion failure emit the per-passage notes with a header explaining the
+  reduce failed. `SubscriptionExhausted` still propagates so the caller can wait
+  and resume.
+- **Test:** `test_reduce_failure_still_yields_the_passage_notes` and
+  `test_exhaustion_during_reduce_is_not_swallowed`. The media path already had
+  this property for transcripts; the book path did not, and the asymmetry was
+  invisible until a real 91,000-word book hit it.
+
+### PDF outline order let one bookmark claim an entire book
+- **Symptom:** `llmops.pdf` and `hands-onmachinelearning….pdf` each produced
+  exactly ONE section spanning every page, titled
+  `7x9_web_Rabbit.pdf > Blank Page` — while still reporting provenance
+  `pdf (bookmarks)` and a plausible 90,694-word count.
+- **Cause:** page ownership walked bookmarks in *outline* order, each claiming
+  "my start page through the end". A PDF outline need not be monotonic and real
+  ones are not: LLMOps ends its outline with three production artifacts
+  (`7x9_web_Rabbit.pdf`, `Blank Page`, `Blank Page`) all pointing at page 1.
+  Last in outline order, they overwrote ownership of all 284 pages.
+- **Fix:** sort bookmark indices by (page, outline position) and give each page
+  to the last bookmark starting at or before it; emit sections in page order.
+  llmops now yields 172 sections, hands-on ML 372.
+- **Test:** `test_non_monotonic_outline_does_not_swallow_the_book` and
+  `test_pdf_sections_are_emitted_in_page_order` build real PDFs with a
+  backwards outline. Found by `--extract-only` printing "1 sections" beside
+  "pdf (bookmarks)", which is self-contradictory.
+
+### Adding a second CLI command broke the bare-URL invocation
+- **Symptom:** three existing tests failed after the `book` command was added.
+  Nothing in the video path had changed.
+- **Cause:** typer requires an explicit subcommand once more than one command is
+  registered, so `python -m video2mdnotes.main <url>` — the form used by
+  readme.md, the overnight sweep and any cron entry — became invalid.
+- **Fix:** `_with_default_command()` inserts the implicit `process` verb when the
+  first argument is neither a known command nor a flag.
+- **Test:** `test_bare_url_still_reaches_process_without_a_verb` pins the
+  bare-URL, explicit-verb, `book` and `--help` forms.
+
+### Book chunks were summarized with the video prompt
+- **Symptom:** book passages produced plausible notes with no locators and no
+  SKIP behaviour. No error, no failing test.
+- **Cause:** `_complete_claude_cli()` takes the system prompt as a *file*. When
+  the failover loop was factored into `complete_with_failover(system_prompt, …)`,
+  the CLI branch kept passing `settings.prompt_file` and silently ignored the
+  new argument.
+- **Fix:** write the caller's prompt to a `NamedTemporaryFile`, pass that path,
+  delete it in a `finally`.
+- **Test:** `test_claude_cli_receives_the_callers_system_prompt` sends a sentinel
+  string and asserts the CLI reads exactly it. Originally caught by reading
+  `ps aux` for the running job — adding a parameter can leave a call site
+  ignoring it while every test stays green.
+
+### PDF bookmark page ranges double-counted text
+- **Symptom:** `llmops.pdf` extracted to 213,451 words. The same book's EPUB gave
+  91,178; the PDF's own text layer holds 90,778. A 2.35× inflation.
+- **Cause:** each bookmark was given the span from its own start page to the next
+  bookmark's. Bookmarks routinely share a start page (92 of 264 here) and nested
+  outlines let a chapter's span cover its own subsections, so pages were claimed
+  repeatedly.
+- **Fix:** partition pages so each belongs to exactly one bookmark. Duplication
+  is now 1.00–1.01× across all 11 paired books.
+- **Test:** `test_pdf_pages_are_never_double_counted`, plus
+  `test_pdf_and_epub_of_the_same_book_agree_on_length` (within 10%). Found only
+  because the corpus holds the same titles in two formats.
+
 ### A bare `uv sync` silently strips lint, tests and visual extraction
 - **Symptom:** `ruff`, `pytest`, `ocrmac`, `imagehash` and `Pillow` disappear. The
   checkout still imports and still runs, so nothing announces the loss.
