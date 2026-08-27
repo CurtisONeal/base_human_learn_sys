@@ -70,10 +70,11 @@ video2mdnotes/
 
 ### Package Management
 
-> ⚠️ **Use `uv sync --extra ocr --extra dev`, not a bare `uv sync`.**
-> OCR and dev dependencies are optional extras, so a bare sync silently removes
-> `ruff`, `pytest`, `ocrmac`, `imagehash` and `Pillow` — leaving a checkout that
-> looks fine but has no lint, no tests, and no visual extraction.
+> ⚠️ **Use `uv sync --extra ocr --extra dev --extra documents --extra semantic`, not a bare `uv sync`.**
+> OCR, dev and document dependencies are optional extras, so a bare sync silently
+> removes `ruff`, `pytest`, `ocrmac`, `imagehash`, `Pillow`, `pymupdf` and `fastembed` — leaving
+> a checkout that looks fine but has no lint, no tests, no visual extraction,
+> no PDF support, and no semantic search.
 
 This project uses modern Python packaging tools:
 - **uv**: A fast, reliable package installer and virtual environment manager.
@@ -168,9 +169,10 @@ means the fix does not survive.
 uv lock --upgrade-package yt-dlp          # or: --upgrade-package numpy
 
 # 2. Sync WITH THE EXTRAS. A bare `uv sync` silently removes ruff, pytest,
-#    ocrmac, imagehash and Pillow — leaving a checkout that looks fine but has
-#    no lint, no tests, and no visual extraction.
-uv sync --extra ocr --extra dev
+#    ocrmac, imagehash, Pillow and pymupdf — leaving a checkout that looks fine
+#    but has no lint, no tests, no visual extraction, and no PDF support.
+#    (EPUB needs no extra: it is stdlib zipfile + html.parser.)
+uv sync --extra ocr --extra dev --extra documents --extra semantic
 
 # 3. Fast check.
 .venv/bin/python -m pytest tests/ -q -m "not integration"
@@ -217,7 +219,7 @@ weaker model doing the work without noticing.
 
 | Step | What runs it | Your choice? |
 |---|---|---|
-| **Transcription** (audio → text) | `faster-whisper`, locally on CPU | Model size only (`FW_MODEL`, default `medium`). No API, no key, no network. |
+| **Transcription** (audio → text) | `faster-whisper`, locally on CPU | Model auto-selected between `large-v3` (multilingual, default) and `distil-large-v3` (English, far-field audio) from free signals — see `ASR_AUTO_SELECT` in `.env.example`. No API, no key, no network. |
 | **Summarization** (text → notes) | An LLM, via one of the backends below | **Yes — this section.** |
 
 Nothing in this section touches transcription. A "cheaper model" here means
@@ -591,3 +593,23 @@ uv run ruff check . --fix
 # Format all files
 uv run ruff format .
 ```
+
+---
+
+## Keeping the docs true
+
+**Update this readme after any session that changes behaviour — not just
+setup.** A readme that describes the previous version is worse than none,
+because it is trusted.
+
+Companion docs:
+
+| File | For |
+|---|---|
+| `AGENTS.md` | rules for anyone (human or agent) changing this code |
+| `HUMAN_PLANS.md` | context for picking the work back up |
+| `FIXED_BUGS.md` | 30 entries; most share one shape — confident, plausible, wrong |
+| `design/` | the work-package designs and methodology writeups |
+
+ADRs for this pipeline currently live in `agent_set_up/ADR_INSTALL_LOG.md`
+rather than here.
