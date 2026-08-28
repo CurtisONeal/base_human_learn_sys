@@ -19,10 +19,18 @@ import re
 from html.parser import HTMLParser
 from typing import List, Optional, Tuple
 
-# Matches the tag itself plus the class-name conventions seen in the wild:
-# Springer "ProgramCode", O'Reilly "programlisting", Manning "listing",
-# generic blog/doc-site "highlight"/"hljs"/"codehilite".
-CODE_CLASS = re.compile(
+# Publisher class-name conventions: Springer "ProgramCode", O'Reilly
+# "programlisting", Manning "listing". This is the set validated against the
+# real 880-book corpus — it is the DEFAULT and should not be widened without
+# measuring the whole corpus first.
+CODE_CLASS = re.compile(r"program|listing|code|verbatim|sourcecode", re.I)
+
+# Syntax-highlighter classes common on blogs and doc sites. NOT in the default,
+# because adding them here silently cost 8.8% of a book: technical EPUBs use
+# `class="highlight"` on broad wrappers (masteringgo: 11,595 occurrences), and
+# a wrapper opening a code fence mis-tracks the fence nesting and drops text.
+# Measured: 10 of 78 EPUBs changed, −49,375 words, when this was the default.
+WEB_CODE_CLASS = re.compile(
     r"program|listing|code|verbatim|sourcecode|highlight|hljs|codehilite", re.I
 )
 BLOCK_TAGS = {
@@ -30,7 +38,20 @@ BLOCK_TAGS = {
     "h1", "h2", "h3", "h4", "h5", "h6", "figcaption", "td", "dd", "dt",
 }
 HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
-SKIP_TAGS = {"script", "style", "head", "title", "nav", "footer"}
+
+# Tags whose CONTENT is never body text, in any container.
+SKIP_TAGS = {"script", "style", "head", "title"}
+
+# Site chrome. Additive, and NOT part of the default: a fetched article page
+# carries a site nav and footer that are real navigation furniture, but an
+# EPUB uses the same tags for content — `<footer>` for footnotes, `<nav>` for
+# in-chapter structure.
+#
+# Measured, after this was briefly made the shared default: 24 of 78 real
+# EPUBs lost content, up to 9.6% of a book (masteringgo lost 17,918 words),
+# 72,239 words across the sample. It passed review because it was verified
+# against ONE book that happened to be unaffected.
+WEB_CHROME_TAGS = {"nav", "footer"}
 
 
 class TextExtractor(HTMLParser):
@@ -40,15 +61,16 @@ class TextExtractor(HTMLParser):
     line-joined source will happily describe code that does not exist. Keeping
     the fence tells it — and any later reader — where prose stops.
 
-    `nav`/`footer` are skipped here (unlike the base HTML skip list) because a
-    fetched article page routinely carries a site nav and footer boilerplate
-    that an EPUB spine document never does — those are real navigation
-    chrome, not content, and including them pollutes every article's opening
-    with a menu instead of its first paragraph.
+    `skip_tags` is a constructor argument rather than a module constant
+    because the correct set differs by container and getting it wrong is
+    silent. A web page's `<nav>`/`<footer>` are chrome; an EPUB's are content
+    (footnotes, in-chapter structure). Callers pass what their format means.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, skip_tags=None, code_class=None) -> None:
         super().__init__(convert_charrefs=True)
+        self.skip_tags = set(skip_tags) if skip_tags is not None else set(SKIP_TAGS)
+        self.code_class = code_class if code_class is not None else CODE_CLASS
         self.parts: List[str] = []
         # (level, text, position-in-parts-when-the-heading-OPENED). Position is
         # what lets a caller with no other structure to key off (a bare local
@@ -73,14 +95,14 @@ class TextExtractor(HTMLParser):
         tag = tag.lower()
         if tag == "title":
             self._title_depth += 1
-        if tag in SKIP_TAGS:
+        if tag in self.skip_tags:
             self._skip_depth += 1
             return
         attr = dict(attrs)
         if attr.get("id"):
             self.anchors.append((len(self.parts), attr["id"]))
         is_code = tag in ("pre", "code") or bool(
-            CODE_CLASS.search(attr.get("class") or "")
+            self.code_class.search(attr.get("class") or "")
         )
         if is_code:
             if self._code_depth == 0:
@@ -98,7 +120,7 @@ class TextExtractor(HTMLParser):
         tag = tag.lower()
         if tag == "title":
             self._title_depth = max(0, self._title_depth - 1)
-        if tag in SKIP_TAGS:
+        if tag in self.skip_tags:
             self._skip_depth = max(0, self._skip_depth - 1)
             return
         if self._code_depth and (tag in ("pre", "code") or self._code_depth):

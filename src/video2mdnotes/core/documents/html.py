@@ -21,7 +21,9 @@ from pathlib import Path
 from typing import List
 from urllib.parse import urlparse
 
-from video2mdnotes.core.documents._htmltext import TextExtractor
+from video2mdnotes.core.documents._htmltext import (
+    SKIP_TAGS, WEB_CHROME_TAGS, WEB_CODE_CLASS, TextExtractor,
+)
 from video2mdnotes.core.sources import Section, SourceText, build_full_text
 from video2mdnotes.core.webfetch import fetch_text
 
@@ -76,7 +78,13 @@ def _sections_from_headings(parser: TextExtractor) -> List[Section]:
 
 
 def _build(html_text: str, title_fallback: str, origin: str, provenance: str) -> SourceText:
-    parser = TextExtractor()
+    # A web page's nav and footer are site chrome; skipping them is right HERE
+    # and wrong for EPUB, which uses the same tags for footnotes and in-chapter
+    # structure. Opted into explicitly rather than inherited from a shared
+    # default — see WEB_CHROME_TAGS for what happened when it was shared.
+    parser = TextExtractor(
+        skip_tags=SKIP_TAGS | WEB_CHROME_TAGS, code_class=WEB_CODE_CLASS,
+    )
     parser.feed(html_text)
     sections = _sections_from_headings(parser)
     if not sections:

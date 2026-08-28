@@ -308,3 +308,46 @@ def test_doubled_hash_in_a_heading_title_is_stripped(tmp_path):
     result = extract_text(md)
     assert result.sections[0].path == ["API Design and Fundamentals"]
     assert "#" not in result.sections[0].locator.lstrip("§")
+
+
+# --- Shared-parser defaults must not drift toward web semantics -------------
+
+def test_epub_default_parser_does_not_skip_nav_or_footer():
+    """EPUB uses <nav>/<footer> for CONTENT, not chrome.
+
+    Regression with a measured cost: when the shared module briefly made
+    nav/footer part of the default skip set, 24 of 78 real EPUBs lost content
+    — up to 9.6% of a book, 72,239 words across the sample. It survived review
+    because it was verified against one book that happened to be unaffected.
+    """
+    from video2mdnotes.core.documents._htmltext import SKIP_TAGS, TextExtractor
+    assert "nav" not in SKIP_TAGS and "footer" not in SKIP_TAGS
+    parser = TextExtractor()          # EPUB's configuration: the defaults
+    parser.feed("<html><body><footer>Footnote 12: a real citation.</footer></body></html>")
+    assert "Footnote 12" in parser.text()
+
+
+def test_epub_default_code_classes_exclude_syntax_highlighter_names():
+    """`class="highlight"` on a broad wrapper mis-tracks fence nesting.
+
+    Regression: adding highlight/hljs/codehilite to the shared default cost
+    10 of 78 EPUBs a total of 49,375 words — masteringgo alone uses
+    `highlight` 11,595 times, on wrappers rather than on code.
+    """
+    from video2mdnotes.core.documents._htmltext import CODE_CLASS, WEB_CODE_CLASS
+    assert not CODE_CLASS.search("highlight")
+    assert CODE_CLASS.search("ProgramCode"), "publisher conventions must still match"
+    assert WEB_CODE_CLASS.search("highlight"), "the web variant still needs it"
+
+
+def test_html_opts_into_web_semantics_explicitly(tmp_path):
+    """The web path must still strip chrome — the opt-in has to actually work."""
+    f = tmp_path / "page.html"
+    f.write_text(
+        "<html><body><nav>Menu</nav><p>Real content.</p>"
+        "<footer>Site footer</footer></body></html>"
+    )
+    result = extract_html(f)
+    assert "Real content" in result.full_text
+    assert "Menu" not in result.full_text
+    assert "Site footer" not in result.full_text

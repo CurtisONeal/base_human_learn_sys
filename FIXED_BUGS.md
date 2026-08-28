@@ -13,6 +13,39 @@ Newest first. Format: symptom → cause → fix → how we know.
 
 ---
 
+### A "deduplication" refactor silently changed EPUB extraction on 24 of 78 books
+- **Symptom:** none visible. Extraction still ran, still produced plausible
+  word counts, still passed all 45 document tests. 24 of 78 real EPUBs lost
+  content — up to **9.6% of a book** (masteringgo: −17,918 words), −72,239
+  words across the sample.
+- **Cause:** extracting EPUB's HTML parser into a module shared with the new
+  `html.py` was fine in itself. Two *behaviour* changes rode along inside the
+  "pure refactor":
+  1. `nav` and `footer` added to the shared skip set — correct for a web page
+     (site chrome), wrong for EPUB, which uses `<footer>` for footnotes and
+     `<nav>` for in-chapter structure.
+  2. `highlight|hljs|codehilite` added to the code-class regex — technical
+     EPUBs put `class="highlight"` on broad *wrappers* (masteringgo: 11,595
+     occurrences), and a wrapper opening a code fence mis-tracks the fence
+     nesting and drops text rather than merely re-fencing it.
+- **Fix:** `skip_tags` and `code_class` became per-instance constructor
+  arguments. The defaults are exactly what EPUB validated against the
+  880-book corpus; `html.py` opts into `WEB_CHROME_TAGS` and `WEB_CODE_CLASS`
+  explicitly. Verified by A/B-ing the pre-refactor extractor (restored from
+  git) against the current one across 80 real EPUBs: **78 identical, 0
+  different.**
+- **Test:** `test_epub_default_parser_does_not_skip_nav_or_footer`,
+  `test_epub_default_code_classes_exclude_syntax_highlighter_names`,
+  `test_html_opts_into_web_semantics_explicitly`.
+- **How it got through:** I verified the refactor against ONE book
+  (llmops.epub) which happened to be unaffected, and reported it as
+  "byte-identical extraction on the real corpus". One book is not a corpus.
+  This is the exact failure the `verify-the-artifact-not-the-diff` memory
+  describes, committed the same night that memory was written — verifying an
+  artifact is not enough if the sample can't show the failure. **A refactor
+  touching validated code needs an A/B across the population, not a spot
+  check.**
+
 ### A refactor conflated "ordinary failure" with "exhaustion, stop the batch"
 - **Symptom:** none shipped — caught while writing the refactor, before any
   test ran, by re-reading the original code's exact branch semantics rather
