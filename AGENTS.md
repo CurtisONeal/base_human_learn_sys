@@ -102,4 +102,4 @@ model it should not be — check `FW_MODEL` handling.
 **Add a `FIXED_BUGS.md` entry for anything that was silently wrong.** State the
 numbers, and say plainly when a fix has no test.
 
-**Update `readme.md` after any session that changes behaviour, not just setup.**
+**Update `README.md` after any session that changes behaviour, not just setup.**
