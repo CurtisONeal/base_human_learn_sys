@@ -32,8 +32,15 @@ deliberately.
 - [ ] **WP-05 plan stage.** Locate is done. But I am no longer sure ranking is
       the missing piece — the free evidence answer is often enough. Use the
       catalog for a week before building on it.
-- [ ] **WP-01 text/md/html.** Half a session. Closes the `.md`/`.txt`/article
-      gap and unblocks the HF docs around the courses.
+- [x] **WP-01 text/md/html — done 2026-08-27.** `process ./notes.md` and
+      `process <article-url>` both work now. Picked for that night's run
+      specifically because its own acceptance test doesn't need my judgment
+      at the end, unlike WP-05's — bounded, testable against real files, like
+      EPUB/PDF were. Found one real bug worth remembering: a real vault note
+      had a doubled heading marker (`# # Real Title`, an export artifact),
+      producing a locator with a literal `#` in it. Fixed by treating a
+      heading's own title as metadata to normalise, not body content to keep
+      verbatim — the fence-preservation rule doesn't apply to a heading's text.
 - [ ] **Volume residency.** 329 books live on an external drive. `catalog
       verify` reports present/offline/missing; deciding whether to copy them
       local is still open.

@@ -13,6 +13,44 @@ Newest first. Format: symptom → cause → fix → how we know.
 
 ---
 
+### A refactor conflated "ordinary failure" with "exhaustion, stop the batch"
+- **Symptom:** none shipped — caught while writing the refactor, before any
+  test ran, by re-reading the original code's exact branch semantics rather
+  than trusting the new shape looked equivalent.
+- **Cause:** extracting `book`'s per-file summarize logic into a shared helper
+  (`_summarize_and_write_document`, reused by `process`'s new local-file/article
+  path) initially returned the same `"failed"` value for three different
+  cases: an ordinary exception, a `SubscriptionExhausted` retry that failed
+  again under `--on-exhaustion wait`, and immediate exhaustion under any other
+  policy. The caller's loop then did `if _resolve_exhaustion_policy() != "wait":
+  break` on every `"failed"`, which would have stopped an entire batch on one
+  corrupt file whenever the operator had set `--on-exhaustion` to anything but
+  `wait` — directly contradicting "one bad book must not stop the batch", the
+  stated reason the per-file try/except exists at all.
+- **Fix:** a fourth return value, `"stop"`, used only for the one case that
+  should actually halt the batch (exhaustion, non-wait policy). Everything
+  else — ordinary failures and a failed wait-then-retry — returns `"failed"`
+  and the batch continues, matching the original code exactly.
+- **Test:** none directly (behavioural equivalence to the pre-refactor code,
+  verified by re-running the full suite: 273 passed, unchanged from before the
+  refactor). Worth a dedicated regression test if this helper changes again.
+
+### A doubled markdown heading marker leaked into a locator
+- **Symptom:** running the new plaintext extractor against a real vault note
+  (not a synthetic fixture) produced `[§# API Design and Fundamentals of…]` —
+  a locator with a literal `#` inside it.
+- **Cause:** the source file's first line was `# # API Design and
+  Fundamentals...` — a doubled hash, almost certainly an artifact of whatever
+  exported the note rather than something the author typed. The ATX heading
+  regex correctly parsed the outer `#` as the marker and captured `"# API
+  Design..."` as the title verbatim — technically correct, visibly wrong.
+- **Fix:** a heading's own title is metadata a reader uses to find the
+  section, not body content a claim quotes — unlike a fenced code block, which
+  must survive untouched, a title is fair to normalise. Any leading `#+\s*`
+  surviving into the captured title is now stripped.
+- **Test:** `test_doubled_hash_in_a_heading_title_is_stripped`, plus the fix
+  was verified against the real file that exposed it before being called done.
+
 ### Chapter-level locators were too coarse to check
 - **Symptom:** every claim in book notes cited `[ch. 1]`. On LLMOps that is 33
   sections and 6,923 words, and the whole 259-section book collapsed to 15

@@ -254,14 +254,14 @@ The corpus is almost certainly on the **laptop**, not this Mac mini. Corpus tria
 
 Each is one session, and becomes its own doc under `design/components/`.
 
-### WP-01 — Source seam + text / markdown / HTML
+### WP-01 — Source seam + text / markdown / HTML — **DONE 2026-08-27**
 - **Goal** Introduce `SourceText` as the canonical summarizer input, and prove it by putting non-media text through it.
 - **In/Out** local `.md`/`.txt` or public article URL → same notes shape as today.
-- **New** `core/sources.py`; `core/documents/{__init__,plaintext,html}.py`; tests.
-- **Changed** `core/summarizer.py` signature; `main.py` routing; `core/transcriber.py` (`TranscriptResult` becomes a media-flavoured `SourceText`).
-- **Type** `SourceText{source_id, title, kind: media|document, origin, language, full_text, segments=[], sections=[], provenance, captured_at, extractor}`. New `Section{path, locator, text, word_count}`. Documents carry empty `segments` — which is why the visual plugin is naturally inapplicable to them.
-- **Accept** 1. `process ./notes.md` summarizes. 2. `process <public article>` summarizes. 3. YouTube path byte-identical. 4. 145 tests pass. 5. A test asserts a document `SourceText` skips the visual path rather than erroring.
-- **Not in scope** EPUB, PDF, docx, chunking, any change to captions/Whisper/frames/OCR/ranking/domains, renaming.
+- **Built** `core/documents/{plaintext,html,_htmltext}.py`. `SourceText`/`Section` already existed from WP-02 — this WP's real remaining scope turned out smaller than estimated. `_htmltext.py` is new: EPUB's HTML parser was extracted into a shared module rather than duplicated, since a local `.html` file and a fetched article are the same parsing problem as EPUB's XHTML wearing a different container.
+- **Changed** `main.py`: `process` now checks for a local document file before assuming a URL, and falls back to `html.extract_url()` when yt-dlp raises `DownloadError` and no video embed is found either — the same cheapest-signal-first cascade as embed scraping, one step further. `book`'s per-file logic was refactored into a shared `_summarize_and_write_document()` used by both commands.
+- **Accept** 1. `process ./notes.md` summarizes ✅. 2. `process <public article>` summarizes ✅ (network mocked in tests per the established webfetch boundary; parsing is real). 3. YouTube path byte-identical ✅ — explicit regression test plus the full existing suite unchanged. 4. ~~145 tests~~ 25 new tests, 297 total. 5. Document `SourceText` skips the visual path ✅ (already covered by WP-02's `test_document_has_no_timeline_so_visual_path_cannot_apply`).
+- **Bugs found building it** (see FIXED_BUGS.md): a real vault note had a doubled markdown heading marker (`# # Real Title`) — an export artifact — which produced a locator with a literal `#` in it; and the `book`/`process` refactor initially conflated "ordinary failure" with "exhaustion under a non-wait policy" in a shared return value, which would have made an ordinary per-file error silently stop an entire batch whenever `--on-exhaustion` was set to anything but `wait` — caught before it shipped, not after.
+- **Not in scope** docx, chunking changes, any change to captions/Whisper/frames/OCR/ranking/domains.
 
 ### WP-02 — EPUB + PDF with structure and chunked summarization
 - **Goal** Read owned books/papers preserving chapter structure and page provenance; summarize book-length text without a context error.

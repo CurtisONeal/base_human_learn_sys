@@ -27,15 +27,14 @@ error. Nothing here writes the extracted text anywhere — the caller decides,
 and the text is copyrighted.
 """
 
-import html
 import posixpath
 import re
 import zipfile
-from html.parser import HTMLParser
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from xml.etree import ElementTree as ET
 
+from video2mdnotes.core.documents._htmltext import TextExtractor
 from video2mdnotes.core.sources import Section, SourceText, build_full_text
 from video2mdnotes.logger import logger
 
@@ -46,16 +45,6 @@ _NS = {
     "xhtml": "http://www.w3.org/1999/xhtml",
     "dc": "http://purl.org/dc/elements/1.1/",
 }
-
-# Publishers rarely use bare <pre>. These are the class-name stems seen in the
-# wild (Springer "ProgramCode", O'Reilly "programlisting", Manning "listing").
-_CODE_CLASS = re.compile(r"program|listing|code|verbatim|sourcecode", re.I)
-_BLOCK_TAGS = {
-    "p", "div", "br", "li", "tr", "section", "article", "blockquote",
-    "h1", "h2", "h3", "h4", "h5", "h6", "figcaption", "td", "dd", "dt",
-}
-_HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
-_SKIP_TAGS = {"script", "style", "head", "title"}
 
 
 # "13. Agentic RAG", "Chapter 7", "Ch 2 —" all denote a numbered chapter.
@@ -127,96 +116,6 @@ def _locator_for(path: List[str]) -> str:
     if chapter:
         return f"{chapter} §{title}" if title else chapter
     return title or "unplaced"
-
-
-class _TextExtractor(HTMLParser):
-    """XHTML → plain text with code blocks fenced and headings marked.
-
-    Fencing code matters more than it looks: a summarizer shown de-indented,
-    line-joined Python will happily describe code that does not exist. Keeping
-    the fence tells it — and any later reader — where prose stops.
-    """
-
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self.parts: List[str] = []
-        self.headings: List[Tuple[int, str]] = []
-        # (index into self.parts, element id) for every anchor the TOC could
-        # point at. Recorded as a part index rather than a character offset so
-        # that per-section whitespace cleanup cannot shift it.
-        self.anchors: List[Tuple[int, str]] = []
-        self._skip_depth = 0
-        self._code_depth = 0
-        self._heading: Optional[int] = None
-        self._heading_buf: List[str] = []
-
-    def handle_starttag(self, tag, attrs):
-        tag = tag.lower()
-        if tag in _SKIP_TAGS:
-            self._skip_depth += 1
-            return
-        attr = dict(attrs)
-        if attr.get("id"):
-            self.anchors.append((len(self.parts), attr["id"]))
-        is_code = tag in ("pre", "code") or bool(
-            _CODE_CLASS.search(attr.get("class") or "")
-        )
-        if is_code:
-            if self._code_depth == 0:
-                self.parts.append("\n```\n")
-            self._code_depth += 1
-            return
-        if tag in _HEADING_TAGS:
-            self._heading = int(tag[1])
-            self._heading_buf = []
-        if tag in _BLOCK_TAGS:
-            self.parts.append("\n")
-
-    def handle_endtag(self, tag):
-        tag = tag.lower()
-        if tag in _SKIP_TAGS:
-            self._skip_depth = max(0, self._skip_depth - 1)
-            return
-        if self._code_depth and (tag in ("pre", "code") or self._code_depth):
-            # Close on the matching tag; class-based blocks close on their own
-            # element, which we cannot know here, so fall back to the tag that
-            # opened a fence. Imperfect nesting yields one extra fence, never
-            # lost text.
-            if tag in ("pre", "code", "div", "p", "figure", "table"):
-                self._code_depth -= 1
-                if self._code_depth == 0:
-                    self.parts.append("\n```\n")
-                return
-        if tag in _HEADING_TAGS and self._heading is not None:
-            text = " ".join("".join(self._heading_buf).split())
-            if text:
-                self.headings.append((self._heading, text))
-            self._heading = None
-            self._heading_buf = []
-        if tag in _BLOCK_TAGS:
-            self.parts.append("\n")
-
-    def handle_data(self, data):
-        if self._skip_depth:
-            return
-        self.parts.append(data)
-        if self._heading is not None:
-            self._heading_buf.append(data)
-
-    @staticmethod
-    def _clean(raw: str) -> str:
-        raw = html.unescape(raw)
-        # Collapse runs of blank lines but keep paragraph separation.
-        raw = re.sub(r"[ \t]+", " ", raw)
-        raw = re.sub(r"\n{3,}", "\n\n", raw)
-        return "\n".join(line.strip() for line in raw.splitlines()).strip()
-
-    def text(self) -> str:
-        return self._clean("".join(self.parts))
-
-    def text_between(self, start: int, end: Optional[int]) -> str:
-        """Text for the slice of parts between two anchor positions."""
-        return self._clean("".join(self.parts[start:end]))
 
 
 def _read(zf: zipfile.ZipFile, name: str) -> bytes:
@@ -408,7 +307,7 @@ def extract(path: Path) -> SourceText:
         for href in spine:
             if href not in names:
                 continue
-            parser = _TextExtractor()
+            parser = TextExtractor()
             try:
                 parser.feed(zf.read(href).decode("utf-8", errors="replace"))
             except Exception as exc:               # malformed XHTML is common

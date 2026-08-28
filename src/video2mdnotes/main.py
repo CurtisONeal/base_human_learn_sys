@@ -4,6 +4,7 @@ import shutil
 import sys
 import time
 import datetime as dt
+import yt_dlp
 from pathlib import Path
 from rich.console import Console
 from rich.panel import Panel
@@ -529,6 +530,91 @@ def catalog(
         raise typer.Exit(1)
 
 
+def _summarize_and_write_document(
+    source, out_root: Path, label: str, force: bool, extract_only: bool, max_words,
+) -> str:
+    """Chunk, summarize, and write one already-extracted document.
+
+    Shared by `book` (one call per file in a batch) and `process` (a single
+    local document or fetched article) so both go through identical
+    exhaustion handling and the same `no_summary_` marking — the two paths
+    diverge only in how the `SourceText` was obtained, never in what happens
+    to it afterwards.
+
+    Returns: "done" | "skipped" | "failed" | "stop" | "shown".
+
+    "failed" and "stop" are deliberately distinct, not two names for the same
+    thing: an ordinary failure (corrupt file, a bad chunk) must never halt a
+    batch — "one bad book must not stop the batch" is the reason `book`
+    catches per-file extraction errors at all. Only exhaustion under a
+    non-wait policy earns a "stop". Collapsing these into one "failed" value
+    would make the caller's loop stop the whole batch on an ordinary error
+    whenever the operator had set --on-exhaustion to anything but wait — a
+    regression that would have shipped invisibly, since the retry-then-give-up
+    path and the immediate-non-wait-stop path both come through the same
+    `except SubscriptionExhausted` block.
+
+    "shown" (--extract-only): printed structure, made no model call, and is
+    deliberately uncounted in any tally — it summarized nothing, so "skipped"
+    would misreport it as work that was avoided rather than never attempted.
+    """
+    from video2mdnotes.core.chunking import chunk_sections
+    from video2mdnotes.core.summarizer import summarize_document
+
+    out_root.mkdir(parents=True, exist_ok=True)
+    summary_path = out_root / f"{source.source_id}.summary.md"
+    if summary_path.exists() and not force and not extract_only:
+        console.print(f"{label} [dim]Skipping (already summarized):[/dim] {source.title}")
+        return "skipped"
+
+    chunks = chunk_sections(source.sections, **({"max_words": max_words} if max_words else {}))
+    warning = " [yellow](structure inferred)[/yellow]" if source.structure_is_inferred else ""
+    console.print(
+        f"{label} [bold]{source.title}[/bold]{warning}\n"
+        f"      {source.word_count:,} words · {len(source.sections)} sections · "
+        f"{len(chunks)} passages · {source.provenance}"
+    )
+
+    if extract_only:
+        for section in source.sections[:12]:
+            console.print(f"        [{section.locator}] {' > '.join(section.path)}")
+        if len(source.sections) > 12:
+            console.print(f"        [dim]… {len(source.sections) - 12} more[/dim]")
+        return "shown"
+
+    try:
+        result = summarize_document(
+            source, max_words=max_words,
+            progress=lambda i, n, loc: console.print(
+                f"        passage {i}/{n} [{loc}]", highlight=False
+            ),
+        )
+    except SubscriptionExhausted as exc:
+        if _resolve_exhaustion_policy() == "wait":
+            _wait_for_reset(exc)
+            console.print(f"      [yellow]Retrying[/yellow] {source.title}")
+            try:
+                result = summarize_document(source, max_words=max_words)
+            except Exception as retry_exc:  # noqa: BLE001
+                console.print(f"      [red]Failed after wait:[/red] {retry_exc}")
+                return "failed"
+        else:
+            console.print(f"      [red]Stopping:[/red] {exc}")
+            return "stop"
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"      [red]Failed:[/red] {exc}")
+        logger.error(f"{source.title}: {exc}")
+        return "failed"
+
+    # A document that produced nothing is marked the same way an empty video
+    # is, so a directory listing shows which runs are worthless unopened.
+    if EMPTY_TRANSCRIPT_PLACEHOLDER in result.summary_text:
+        summary_path = summary_path.with_name(NO_SUMMARY_PREFIX + summary_path.name)
+    summary_path.write_text(result.summary_text, encoding="utf-8")
+    console.print(f"      [green]Notes:[/green] {summary_path}")
+    return "done"
+
+
 @app.command()
 def book(
     path: str = typer.Argument(..., help="Path to an .epub or .pdf, or a directory of them"),
@@ -555,8 +641,6 @@ def book(
     catch a book whose structure came out wrong *before* paying to summarize it.
     """
     from video2mdnotes.core.documents import SUPPORTED, extract as extract_document
-    from video2mdnotes.core.chunking import chunk_sections
-    from video2mdnotes.core.summarizer import summarize_document
 
     if on_exhaustion:
         settings.on_exhaustion = on_exhaustion.strip().lower()
@@ -575,17 +659,10 @@ def book(
         raise typer.Exit(1)
 
     out_root = settings.output_dir / "books"
-    out_root.mkdir(parents=True, exist_ok=True)
     done = failed = skipped = 0
 
     for position, source_file in enumerate(files, 1):
         label = f"[{position}/{len(files)}]"
-        summary_path = out_root / f"{source_file.stem}.summary.md"
-        if summary_path.exists() and not force and not extract_only:
-            console.print(f"{label} [dim]Skipping (already summarized):[/dim] {source_file.name}")
-            skipped += 1
-            continue
-
         try:
             source = extract_document(source_file)
         except Exception as exc:  # noqa: BLE001 - one bad book must not stop the batch
@@ -594,62 +671,19 @@ def book(
             failed += 1
             continue
 
-        chunks = chunk_sections(
-            source.sections, **({"max_words": max_words} if max_words else {})
+        outcome = _summarize_and_write_document(
+            source, out_root, label, force, extract_only, max_words
         )
-        warning = " [yellow](structure inferred)[/yellow]" if source.structure_is_inferred else ""
-        console.print(
-            f"{label} [bold]{source.title}[/bold]{warning}\n"
-            f"      {source.word_count:,} words · {len(source.sections)} sections · "
-            f"{len(chunks)} passages · {source.provenance}"
-        )
-
-        if extract_only:
-            for section in source.sections[:12]:
-                console.print(f"        [{section.locator}] {' > '.join(section.path)}")
-            if len(source.sections) > 12:
-                console.print(f"        [dim]… {len(source.sections) - 12} more[/dim]")
-            continue
-
-        try:
-            result = summarize_document(
-                source,
-                max_words=max_words,
-                progress=lambda i, n, loc: console.print(
-                    f"        passage {i}/{n} [{loc}]", highlight=False
-                ),
-            )
-        except SubscriptionExhausted as exc:
-            # Same policy as the video path: never silently start spending. Under
-            # the default 'wait' policy this sleeps until capacity returns and
-            # retries this book; otherwise it stops, and the already-written
-            # notes for earlier books remain on disk to resume from.
-            if _resolve_exhaustion_policy() == "wait":
-                _wait_for_reset(exc)
-                console.print(f"      [yellow]Retrying[/yellow] {source_file.name}")
-                try:
-                    result = summarize_document(source, max_words=max_words)
-                except Exception as retry_exc:  # noqa: BLE001
-                    console.print(f"      [red]Failed after wait:[/red] {retry_exc}")
-                    failed += 1
-                    continue
-            else:
-                console.print(f"      [red]Stopping:[/red] {exc}")
-                failed += 1
-                break
-        except Exception as exc:  # noqa: BLE001
-            console.print(f"      [red]Failed:[/red] {exc}")
-            logger.error(f"{source_file.name}: {exc}")
+        if outcome == "done":
+            done += 1
+        elif outcome == "skipped":
+            skipped += 1
+        elif outcome == "failed":
             failed += 1
-            continue
-
-        # A book that produced nothing is marked the same way an empty video is,
-        # so a directory listing shows which runs are worthless without opening them.
-        if EMPTY_TRANSCRIPT_PLACEHOLDER in result.summary_text:
-            summary_path = summary_path.with_name(NO_SUMMARY_PREFIX + summary_path.name)
-        summary_path.write_text(result.summary_text, encoding="utf-8")
-        console.print(f"      [green]Notes:[/green] {summary_path}")
-        done += 1
+        elif outcome == "stop":
+            failed += 1
+            break
+        # "shown" (--extract-only): deliberately uncounted, see the helper's docstring.
 
     console.print(
         f"\n[bold]Books:[/bold] {done} summarized · {skipped} skipped · {failed} failed"
@@ -699,11 +733,46 @@ def process(
 
     from video2mdnotes.core.downloader import sanitize_filename
 
+    # WP-01: a local document file bypasses the entire video pipeline. Checked
+    # before anything else — an existing path is unambiguous, unlike a URL,
+    # which has to be TRIED against yt-dlp to find out what it is.
+    local_path = Path(url).expanduser()
+    if local_path.exists() and local_path.is_file():
+        from video2mdnotes.core.documents import SUPPORTED as _DOC_SUPPORTED, extract as extract_document
+        if local_path.suffix.lower() not in _DOC_SUPPORTED:
+            console.print(f"[red]Unsupported file type:[/red] {local_path.suffix}")
+            raise typer.Exit(1)
+        try:
+            source = extract_document(local_path)
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[red]{type(exc).__name__}:[/red] {exc}")
+            raise typer.Exit(1)
+        outcome = _summarize_and_write_document(
+            source, settings.output_dir / "articles", "[1/1]", force, False, None,
+        )
+        raise typer.Exit(0 if outcome in ("done", "skipped") else 1)
+
     # 1. Probe (metadata + caption availability; no audio yet)
     try:
         logger.info("Step 1: Probing source...")
         sources = probe_source(url)
         logger.success(f"Found {len(sources)} videos.")
+    except yt_dlp.utils.DownloadError as e:
+        # Not a video, and (inside probe_source) not a page that embeds one
+        # either. Last resort: read it as a plain article. This is the same
+        # cheapest-signal-first cascade as embed scraping — video, then a
+        # video embedded in the page, then finally just the page's own text.
+        console.print("[dim]Not a video; trying it as an article…[/dim]")
+        try:
+            from video2mdnotes.core.documents.html import extract_url
+            source = extract_url(url)
+        except Exception:  # noqa: BLE001 - report the ORIGINAL video error, not this fallback's
+            logger.error(f"Processing failed: {e}")
+            raise typer.Exit(code=1)
+        outcome = _summarize_and_write_document(
+            source, settings.output_dir / "articles", "[1/1]", force, False, None,
+        )
+        raise typer.Exit(0 if outcome in ("done", "skipped") else 1)
     except Exception as e:
         logger.error(f"Processing failed: {e}")
         raise typer.Exit(code=1)
