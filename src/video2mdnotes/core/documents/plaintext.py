@@ -31,6 +31,14 @@ from video2mdnotes.core.sources import Section, SourceText, build_full_text
 SUPPORTED = {".md", ".markdown", ".txt", ".text"}
 
 _ATX_HEADING = re.compile(r"^(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
+
+# `[text](url)` in a heading. Measured across 1,650 real vault notes: 38 have
+# one, and the raw form makes a locator useless — a locator exists to be
+# searched for in the source, and
+# "§[uv](https://docs.astral.sh/uv/#uv)" is not something anyone will match.
+# Reduced to its link TEXT, or dropped entirely when the text is empty (a bare
+# `[](url)` permalink anchor, which several doc-site exports emit).
+_MD_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
 # Some export pipelines double-hash a title ("# # Real Title") — found on a
 # real vault note, likely an artifact of whatever produced it rather than
 # something the author typed. A title starting with '#' is never intentional
@@ -74,7 +82,8 @@ def _split_markdown(text: str) -> List[Tuple[List[str], str, int, int]]:
             continue
         flush(i)
         level = len(match.group(1))
-        title = _REDUNDANT_HASH_PREFIX.sub("", match.group(2).strip()).strip()
+        title = _REDUNDANT_HASH_PREFIX.sub("", match.group(2).strip())
+        title = _MD_LINK.sub(lambda m: m.group(1), title).strip()
         trail = trail[: level - 1] + [title]
         body_start = i + 1
         heading_start_line = i + 1
@@ -83,18 +92,47 @@ def _split_markdown(text: str) -> List[Tuple[List[str], str, int, int]]:
     return sections
 
 
+def _read_text_any_encoding(path: Path) -> str:
+    """Read a text file, honouring a UTF-16/UTF-8 BOM if one is present.
+
+    Not a guess: this only acts on an explicit byte-order mark. Measured on the
+    real vault — 8 of 1,650 notes are UTF-16LE with a BOM (exported from
+    Windows tooling). Reading those as UTF-8 raises `UnicodeDecodeError`, which
+    is a **subclass of ValueError**, so the `except ValueError` around the
+    empty-file check swallowed it and reported "empty file, nothing to
+    summarize" for a 7 KB note. Wrong content AND a wrong reason.
+
+    Falls back to UTF-8 with replacement rather than raising: a note that is
+    mostly readable with a few mangled bytes is worth summarizing, whereas
+    refusing it loses the whole file over a stray character.
+    """
+    data = path.read_bytes()
+    for bom, encoding in (
+        (b"\xff\xfe\x00\x00", "utf-32-le"), (b"\x00\x00\xfe\xff", "utf-32-be"),
+        (b"\xff\xfe", "utf-16-le"), (b"\xfe\xff", "utf-16-be"),
+        (b"\xef\xbb\xbf", "utf-8-sig"),
+    ):
+        if data.startswith(bom):
+            # utf-16-le/be leave the BOM as a literal U+FEFF in the decoded
+            # string (utf-8-sig does not). Left in, it becomes the first
+            # character of the first section's text and of any heading it
+            # touches — invisible in a terminal, present in the summary.
+            return data.decode(encoding, errors="replace").lstrip("﻿")
+    return data.decode("utf-8", errors="replace").lstrip("﻿")
+
+
 def extract(path: Path) -> SourceText:
     """Read a `.md`/`.txt` file into a `SourceText`.
 
     Raises:
-        UnicodeDecodeError: not text at all (caught by callers as a bad file,
-            same as any other unreadable document — never silently coerced).
+        FileNotFoundError: no such file.
+        ValueError: the file has no readable text at all.
     """
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(path)
 
-    raw = path.read_text(encoding="utf-8")
+    raw = _read_text_any_encoding(path)
     is_markdown = path.suffix.lower() in (".md", ".markdown")
 
     sections: List[Section] = []

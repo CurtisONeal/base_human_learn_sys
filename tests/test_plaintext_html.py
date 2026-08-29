@@ -351,3 +351,48 @@ def test_html_opts_into_web_semantics_explicitly(tmp_path):
     assert "Real content" in result.full_text
     assert "Menu" not in result.full_text
     assert "Site footer" not in result.full_text
+
+
+def test_utf16_file_is_read_not_reported_as_empty(tmp_path):
+    """UnicodeDecodeError is a SUBCLASS of ValueError.
+
+    8 of 1,650 real vault notes are UTF-16LE with a BOM (Windows tooling
+    exports). Reading them as UTF-8 raised UnicodeDecodeError, which the
+    empty-file `except ValueError` swallowed — reporting "empty file, nothing
+    to summarize" for a 7 KB note. Wrong content and a wrong reason.
+    """
+    f = tmp_path / "windows.md"
+    f.write_bytes(b"\xff\xfe" + "# Real Heading\n\nReal content here.\n".encode("utf-16-le"))
+    result = extract_text(f)
+    assert "Real content here." in result.full_text
+    assert result.sections[0].path == ["Real Heading"]
+
+
+def test_byte_order_mark_never_reaches_the_text(tmp_path):
+    """U+FEFF is invisible in a terminal and present in the summary."""
+    f = tmp_path / "bom.md"
+    f.write_bytes(b"\xff\xfe" + "# Heading\n\nBody.\n".encode("utf-16-le"))
+    result = extract_text(f)
+    assert "﻿" not in result.full_text
+    assert "﻿" not in result.sections[0].path[0]
+
+
+def test_markdown_link_in_a_heading_is_reduced_to_its_text(tmp_path):
+    """A locator exists to be searched for; a raw URL defeats that.
+
+    Measured: 38 of 1,650 vault notes have a link in a heading, producing
+    locators like "§[uv](https://docs.astral.sh/uv/#uv)".
+    """
+    f = tmp_path / "links.md"
+    f.write_text("# [uv](https://docs.astral.sh/uv/#uv) package manager\n\nbody\n")
+    result = extract_text(f)
+    assert result.sections[0].path == ["uv package manager"]
+    assert "http" not in result.sections[0].locator
+
+
+def test_bare_permalink_anchor_in_a_heading_is_dropped(tmp_path):
+    """Doc-site exports emit `[](url)` permalink anchors with no link text."""
+    f = tmp_path / "anchor.md"
+    f.write_text("# Starting n8n[](https://docs.n8n.io/hosting)\n\nbody\n")
+    result = extract_text(f)
+    assert result.sections[0].path == ["Starting n8n"]

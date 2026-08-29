@@ -13,6 +13,34 @@ Newest first. Format: symptom → cause → fix → how we know.
 
 ---
 
+### UTF-16 notes reported as "empty file"; links in headings made locators unusable
+- **Symptom:** two defects, both found only by running the extractor across
+  all 1,650 real vault notes rather than the one note used to call it done.
+  (1) 8 notes failed with "empty file, nothing to summarize" — one of them
+  7 KB. (2) 38 notes produced locators like
+  `§[uv](https://docs.astral.sh/uv/#uv)`.
+- **Cause:** (1) those notes are UTF-16LE with a BOM (Windows tooling
+  exports). `read_text(encoding="utf-8")` raises `UnicodeDecodeError`, which
+  **is a subclass of ValueError** — so the `except ValueError` guarding the
+  empty-file case caught it and reported the wrong reason entirely.
+  (2) markdown links in a heading were kept verbatim; a locator exists to be
+  searched for in the source, and a URL defeats that.
+- **Fix:** (1) read bytes and honour an explicit BOM (UTF-16/32 LE+BE,
+  UTF-8-sig), falling back to UTF-8 with replacement rather than refusing a
+  whole note over a stray byte; strip the residual U+FEFF, which
+  utf-16-le/be leave in the decoded string and which is invisible in a
+  terminal but present in the summary. (2) reduce `[text](url)` to its link
+  text in a heading, dropping bare `[](url)` permalink anchors entirely —
+  same principle as the doubled-hash fix: a heading's own title is metadata
+  to normalise, not content to preserve verbatim.
+- **Test:** `test_utf16_file_is_read_not_reported_as_empty`,
+  `test_byte_order_mark_never_reaches_the_text`,
+  `test_markdown_link_in_a_heading_is_reduced_to_its_text`,
+  `test_bare_permalink_anchor_in_a_heading_is_dropped`.
+- **After:** 1,556 of 1,650 notes extract (was 1,548); 0 noisy locators (was
+  38); the 94 remaining failures are genuinely empty files. EPUB A/B parity
+  re-confirmed unchanged.
+
 ### A "deduplication" refactor silently changed EPUB extraction on 24 of 78 books
 - **Symptom:** none visible. Extraction still ran, still produced plausible
   word counts, still passed all 45 document tests. 24 of 78 real EPUBs lost
