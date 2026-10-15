@@ -11,7 +11,7 @@ Working notes written by Claude Code on **octobobs-mini** (the Hermes machine),
 mirrored here so they are readable in Obsidian without opening the repo.
 
 **Canonical copies live in the repo** at
-`~/Documents/agent_set_up/repos/video2notes-v2/design/`. These are mirrors.
+`~/Documents/agent_set_up/repos/base_human_learn_sys/design/`. These are mirrors.
 When they disagree, the repo is right — it is the one under version control and
 the one edited during work.
 

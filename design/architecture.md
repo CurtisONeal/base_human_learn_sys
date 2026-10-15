@@ -7,7 +7,7 @@ updated: 2026-08-25
 
 # Architecture
 
-Mirror of repo notes. Canonical: `repos/video2notes-v2/design/`.
+Mirror of repo notes. Canonical: `repos/base_human_learn_sys/design/`.
 
 ## The one idea
 

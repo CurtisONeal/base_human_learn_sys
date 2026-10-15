@@ -1,4 +1,4 @@
-# AGENTS.md — video2notes-v2
+# AGENTS.md — base_human_learn_sys (formerly video2notes-v2)
 
 Read before changing anything here. The failure mode in this repo is not a
 crash — it is **output that is confident, plausible, and wrong**: a healthy word

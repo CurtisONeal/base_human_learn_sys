@@ -1,4 +1,11 @@
-# HUMAN_PLANS — video2notes-v2
+# HUMAN_PLANS — base_human_learn_sys (formerly video2notes-v2)
+
+> **Renamed 2026-10-15.** This repo was `video2notes-v2`; it now owns the name
+> `base_human_learn_sys`. The old repo of that name is archived on GitHub as
+> `base_human_learn_sys-archived` (local: `repos/base_human_learn_sys-archived`,
+> which still holds the large .wav files in `temp_files/`). Its uncommitted plan
+> notes are preserved in `human_readable_documentation/HUMAN_PLANS_from_old_base_repo.md`.
+> Dated handoffs and ADRs still say `video2notes-v2` — they are historical records.
 
 Context for picking this back up. What was in my head, not what the code says.
 

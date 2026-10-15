@@ -1,7 +1,7 @@
 # Master design: the Collector and the learning loop
 
 **Status:** supersedes `design/CONSOLIDATED_DESIGN.md` (kept as the dated source record this was built from).
-**Created:** 2026-08-23. **Repo:** `/Users/s_admin/Documents/agent_set_up/repos/video2notes-v2`.
+**Created:** 2026-08-23. **Repo:** `/Users/s_admin/Documents/agent_set_up/repos/base_human_learn_sys`.
 **Governing constraint:** *usability during construction.* Every phase must leave the user able to do something he could not do before. **A phase that only refactors is not a phase.**
 
 ---
