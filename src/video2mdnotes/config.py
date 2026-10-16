@@ -1,3 +1,4 @@
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
 
@@ -92,6 +93,13 @@ class Settings(BaseSettings):
     # calls are recorded at $0 and are never blocked.
     metered_usd_cap: float = 10.0
     provider_usd_caps: dict[str, float] = {}
+    # PER-RUN cap, on top of the cumulative ones above: metered spend plus open
+    # reservations recorded under THIS run's run_id only (one process, or
+    # RUN_ID when set). Unset/empty = no per-run cap. 0 = no metered call at
+    # all in this run (and the vision tier is skipped, since it is metered and
+    # not ledgered). The CLI flag `--usd-cap` (process/media/book/longform) and
+    # the API's `usd_cap` field override it for one invocation.
+    run_usd_cap: float | None = None
     # Passed as max_tokens on metered calls, so the estimate is a real bound.
     metered_max_output_tokens: int = 16000
     # Persistent ledger shared by every run pointed at it. Delete or re-point
@@ -332,6 +340,14 @@ class Settings(BaseSettings):
     output_dir: Path = BASE_DIR / "previous_run_results"
     temp_dir: Path = BASE_DIR / "temp_files"
     prompt_file: Path = BASE_DIR / "summarize_prompt.txt"
+
+    @field_validator("run_usd_cap", mode="before")
+    @classmethod
+    def _blank_cap_is_none(cls, value):
+        # RUN_USD_CAP= (empty, as .env.example ships it) means "no per-run cap".
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
     model_config = SettingsConfigDict(
         env_file=BASE_DIR / ".env",

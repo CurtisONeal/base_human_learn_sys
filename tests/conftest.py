@@ -13,9 +13,9 @@ def _isolated_cost_ledger(tmp_path):
     """
     saved = (settings.cost_ledger_path, settings.metered_usd_cap,
              dict(settings.provider_usd_caps), settings.allow_metered_fallback,
-             settings.allow_anthropic_api)
+             settings.allow_anthropic_api, settings.run_usd_cap, settings.run_id)
     settings.cost_ledger_path = tmp_path / "_cost_ledger.json"
     yield settings.cost_ledger_path
     (settings.cost_ledger_path, settings.metered_usd_cap,
      settings.provider_usd_caps, settings.allow_metered_fallback,
-     settings.allow_anthropic_api) = saved
+     settings.allow_anthropic_api, settings.run_usd_cap, settings.run_id) = saved

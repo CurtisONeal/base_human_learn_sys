@@ -219,6 +219,19 @@ def describe_image(image_path: Path, model: Optional[str] = None) -> str:
     return _HEADING.sub("", text).strip()
 
 
+def vlm_allowed() -> bool:
+    """Whether the (metered, un-ledgered) vision tier may run at all.
+
+    A per-run cap of 0 (RUN_USD_CAP=0 / --usd-cap 0) means "no metered spend
+    this run". The vision call does not go through the cost ledger, so it
+    cannot be capped by amount — it is switched off instead.
+    """
+    cap = getattr(settings, "run_usd_cap", None)
+    if cap is not None and float(cap) <= 0:
+        return False
+    return bool(settings.vlm_enabled)
+
+
 def read_frames(
     frames: List[Keyframe],
     segments=None,
@@ -258,7 +271,7 @@ def read_frames(
                 f"they duplicate the transcript and skew content classification."
             )
     eligible = [
-        settings.vlm_enabled and needs_vision_model(text) for text in ocr_texts
+        vlm_allowed() and needs_vision_model(text) for text in ocr_texts
     ]
 
     # Probe: the OCR above is already paid for (it is free), so use it to infer
@@ -272,7 +285,7 @@ def read_frames(
             logger.info(f"Profile '{guess}' (probe, from OCR yield): {picked.why}")
             _profiles.apply_paid_only(picked)
             eligible = [
-                settings.vlm_enabled and needs_vision_model(t) for t in ocr_texts
+                vlm_allowed() and needs_vision_model(t) for t in ocr_texts
             ]
 
     # Pass 2: rank the eligible frames and spend the budget on the best of
