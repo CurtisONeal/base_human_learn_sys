@@ -56,6 +56,10 @@ The passage transcript is right there, so the check is mechanical:
      terms occurs anywhere in the passage and content coverage at the
      citation is < ``UNVERIFIED_MAX_COVERAGE``. `` _(unverified citation)_``
      is appended.
+    * **normalized** (``citation:normalized``) — before judging, repair
+     commentary the model wrote around a citation (``[5:55:13 is not valid —
+     see [4:55:13]]``, ``[8:46:29]–not cited; see [7:46:29]``) collapses to the
+     citation(s) it points at that exist in the passage; one entry per change.
    * **ambiguous** (``citation:ambiguous``) — a strong term is missing at the
      citation but no unique better region exists: logged with
      ``changed: false`` for a human; the notes are NOT changed.
@@ -206,6 +210,84 @@ _MARKER_RE = re.compile(
 def normalize_citation_markers(text: str) -> Tuple[str, int]:
     """``[7:55:55 n/a]`` -> ``[7:55:55]``. Returns (text, number changed)."""
     return _MARKER_RE.subn(lambda m: f"[{m.group('ts')}]", text or "")
+
+
+# Repair commentary the model wrote around a citation it had second thoughts
+# about (E2, WP-F7) — model output, not pipeline text:
+#   "[5:55:13 is not valid — see [4:55:13]]"
+#   "[8:46:29]–not cited; see [7:46:29] [7:47:50]"
+# CITE_RE does not match the nested form, and the outer form leaves the
+# commentary in the notes as plain text. Both collapse to the valid citation(s).
+_WHY = (r"(?:is\s+)?(?:not\s+(?:a\s+)?valid|invalid|not\s+cited|wrong|incorrect|"
+        r"not\s+in\s+(?:this\s+)?passage|does\s*n[o']t\s+exist|out\s+of\s+range)")
+_SEE = r"(?:see(?:\s+instead)?|use|should\s+be|actually|→|->|=>)"
+_TS_LIST = rf"\[?{_TS}\]?(?:\s*(?:,|;|and|&)?\s*\[?{_TS}\]?)*"
+_COMMENT_INSIDE_RE = re.compile(
+    rf"\[(?P<bad>{_TS})\s*[,;:—–-]?\s*{_WHY}\b[^\[\]\n]*?"
+    rf"(?:{_SEE}\s*(?P<targets>{_TS_LIST})\s*)?\]",
+    re.I)
+_COMMENT_OUTSIDE_RE = re.compile(
+    rf"\[(?P<bad>{_TS})\]\s*(?P<open>\()?\s*(?:[,;:—–-]\s*)?{_WHY}\b[^\[\]\n]*?"
+    rf"{_SEE}\s+(?P<targets>\[{_TS}\](?:\s*(?:,|;|and|&)?\s*\[{_TS}\])*)"
+    rf"(?(open)\s*\))",
+    re.I)
+_TS_ONLY_RE = re.compile(_TS)
+
+
+def _short(ts: str) -> str:
+    return ts.split(".", 1)[0]
+
+
+def normalize_citation_commentary(text: str, valid=None) -> Tuple[str, List[dict]]:
+    """Collapse model repair commentary around a citation to the citation(s) it
+    points at. `valid(seconds) -> bool` (optional) says whether a timestamp is
+    a caption line of the source; when given, only valid targets are kept (if
+    none is valid but the original is, the original is kept). Returns (text,
+    one ``citation:normalized`` log entry per change). Deterministic."""
+    entries: List[dict] = []
+
+    def choose(bad: str, targets: List[str]) -> List[str]:
+        if valid is None:
+            return targets or [bad]
+        ok = [t for t in targets if valid(_parse_ts(t))]
+        if ok:
+            return ok
+        if valid(_parse_ts(bad)) or not targets:
+            return [bad]
+        return targets
+
+    def sub(m):
+        bad = _short(m.group("bad"))
+        raw_targets = m.group("targets") or ""
+        targets = []
+        for t in _TS_ONLY_RE.findall(raw_targets):
+            t = _short(t)
+            if t not in targets:
+                targets.append(t)
+        chosen = choose(bad, targets)
+        new = " ".join(f"[{t}]" for t in chosen)
+        entries.append({
+            "rule": "citation:normalized", "changed": True,
+            "original": m.group(0), "new": new,
+            "original_ts": bad, "new_ts": ", ".join(chosen),
+            "claim": "repair commentary around a citation collapsed to the valid citation",
+        })
+        return new
+
+    out = _COMMENT_INSIDE_RE.sub(sub, text or "")
+    out = _COMMENT_OUTSIDE_RE.sub(sub, out)
+    return out, entries
+
+
+def caption_validator(times: Sequence[float], tol: float = 1.0):
+    """`valid(seconds)`: a caption line starts within [t - 0.5, t + tol) — a
+    citation is the caption start truncated to the second."""
+    ts = sorted(float(t) for t in times)
+
+    def valid(t: float) -> bool:
+        i = bisect.bisect_left(ts, t - 0.5)
+        return i < len(ts) and ts[i] < t + tol
+    return valid
 
 
 def _parse_ts(ts: str) -> float:
@@ -557,6 +639,8 @@ def audit_notes(notes: str, caption_lines: Sequence[Tuple[float, str]]) -> Tuple
         return notes, []
     index = PassageIndex(caption_lines)
     entries: List[dict] = []
+    notes, entries = normalize_citation_commentary(
+        notes, caption_validator([t for t, _ in caption_lines]))
     notes, n_markers = normalize_citation_markers(notes)
     lines = notes.split("\n")
     for unit in iter_units(notes):
@@ -582,6 +666,7 @@ def audit_notes(notes: str, caption_lines: Sequence[Tuple[float, str]]) -> Tuple
 
 __all__ = [
     "AUDIT_FILENAME", "UNVERIFIED_MARK", "WINDOW_S", "PassageIndex", "Term", "Unit",
-    "audit_notes", "extract_terms", "iter_units", "judge", "normalize_citation_markers",
+    "audit_notes", "caption_validator", "extract_terms", "iter_units", "judge",
+    "normalize_citation_commentary", "normalize_citation_markers",
     "tokens",
 ]

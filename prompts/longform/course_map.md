@@ -16,9 +16,12 @@ Output exactly two things and nothing else:
      copy them exactly.
    - `gist` is ONE line (at most ~25 words) saying what the chapter teaches.
 
-2. A heading `### Cross-chapter themes` followed by 3–8 bullets naming ideas
+2. A heading `### Candidate themes` followed by 3–8 bullets naming ideas
    that recur across the chapters given (cite the chapter numbers, e.g.
-   "(ch. 2, 5)").
+   "(ch. 2, 5)"). These are candidates: the chapters are mapped in batches,
+   and the candidates of all batches are merged into the final cross-chapter
+   themes afterwards — so name each idea once, plainly, without restating it
+   in other words.
 
    - A theme names a TOPIC, never a verdict or conclusion about it: write
      "Testing permission rules with live demos (ch. 6, 7)", not "Permission

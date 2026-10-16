@@ -9,7 +9,8 @@ pure pieces built in WP-1/2/4/5/8 into one checkpointed pipeline:
     glossary correction                  ->  corrected copy + corrections.json
     structure ladder on CORRECTED text   ->  chapters / parts    core/structure.py
     one model call per passage           ->  chunk_summaries/ + ledger/  (resumable)
-    one course-map call per batch        ->  ## Course Map (table only)
+    one course-map call per batch        ->  ## Course Map rows + candidate themes
+    one themes call (candidates only)    ->  ### Cross-chapter themes (<= 8)
     deterministic assembly               ->  summaries/<name>.summary.md
     deterministic lint + fix of notes    ->  corrections.json gets `notes:` entries
 
@@ -46,7 +47,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from video2mdnotes.config import BASE_DIR
-from video2mdnotes.core import citations, domains, notes_format, quality, summarizer
+from video2mdnotes.core import citations, domains, notes_format, quality, spoken_dates, summarizer
 from video2mdnotes.core.chunking import DEFAULT_MAX_WORDS
 from video2mdnotes.core.costs import BudgetExhausted, current_run_id
 from video2mdnotes.core.metadata import META_FILENAME, SourceMeta, from_ytdlp_info, prompt_header
@@ -58,6 +59,7 @@ from video2mdnotes.core.transcriber import Segment
 PROMPT_DIR = BASE_DIR / "prompts"
 PASSAGE_PROMPT = PROMPT_DIR / "longform" / "passage.md"
 COURSE_MAP_PROMPT = PROMPT_DIR / "longform" / "course_map.md"
+THEMES_PROMPT = PROMPT_DIR / "longform" / "course_map_themes.md"
 MISHEARING_FRAGMENT = PROMPT_DIR / "fragments" / "mishearing_hint.md"
 LEDGER_FRAGMENT = PROMPT_DIR / "fragments" / "ledger.md"
 
@@ -69,6 +71,8 @@ CHUNK_DIR = "chunk_summaries"
 LEDGER_DIR = "ledger"
 COURSE_MAP_HEADING = "Course Map"
 THEMES_HEADING = "Cross-chapter themes"
+CANDIDATE_THEMES_HEADING = "Candidate themes"
+MAX_THEMES = 8
 # Sections pulled out of every passage's notes and merged once at the end.
 UNCERTAINTY = "Transcription Uncertainty"
 TIME_SENSITIVE = "Time-Sensitive Claims"
@@ -931,9 +935,9 @@ def parse_course_map(text: str) -> Tuple[Dict[str, str], List[str]]:
         s = line.strip()
         h = _HEADING_RE.match(s)
         if h:
-            in_themes = _is(h.group(2), THEMES_HEADING)
+            in_themes = _is(h.group(2), THEMES_HEADING) or _is(h.group(2), CANDIDATE_THEMES_HEADING)
             continue
-        if re.match(r"^\**cross[- ]chapter themes\**:?$", s, re.I):
+        if re.match(r"^\**(?:cross[- ]chapter|candidate) themes\**:?$", s, re.I):
             in_themes = True
             continue
         if in_themes and s.startswith(("-", "*")):
@@ -966,13 +970,132 @@ def _map_collapsed(text: str, batch: List[List[Passage]], gists: Dict[str, str])
     return None
 
 
+# Cross-chapter themes (WP-F7). The map is built in batches, so each batch
+# names its own themes and E2 printed 24 of them, "Agent SDK vs Anthropic SDK"
+# three times. Batches now return CANDIDATE themes; one small final call (input:
+# the candidate bullets and chapter titles only — never the chapter notes)
+# consolidates them into <= MAX_THEMES, with a deterministic merge as fallback.
+
+_THEME_CH = re.compile(r"\s*\((?:ch(?:apters?|s)?\.?|§)\s*([^)]*)\)\s*\.?\s*$", re.I)
+
+
+def split_theme(theme: str) -> Tuple[str, List[str]]:
+    """("Theme text", ["2", "5"]) from "Theme text (ch. 2, 5)"."""
+    m = _THEME_CH.search(theme or "")
+    if not m:
+        return (theme or "").strip(), []
+    chs = [c for c in re.split(r"[,;&\s]+|\band\b", m.group(1)) if c.strip()]
+    return theme[: m.start()].strip(), chs
+
+
+def _ch_key(c: str):
+    return (0, int(c)) if c.isdigit() else (1, c)
+
+
+def render_theme(text: str, chapters: Sequence[str]) -> str:
+    chs = sorted(set(chapters), key=_ch_key)
+    return f"{text} (ch. {', '.join(chs)})" if chs else text
+
+
+def merge_themes(candidates: Sequence[str], limit: int = MAX_THEMES,
+                 threshold: float = 0.5) -> List[str]:
+    """Deterministic consolidation: candidates naming the same idea (overlap
+    coefficient of their distinctive word stems >= `threshold`) merge into one
+    theme citing the union of chapters; themes spanning the most chapters are
+    kept, at most `limit`, in order of first appearance."""
+    items = []
+    for raw in candidates:
+        text, chs = split_theme(raw)
+        if not text:
+            continue
+        toks = {t for t in citations.tokens(text)
+                if len(t) >= 3 and not t.isdigit() and t not in citations.STOPWORDS}
+        items.append((text, chs, toks))
+    if not items:
+        return []
+    # Words in most candidates ("claude", "agent" in an agents course) do not
+    # distinguish one theme from another.
+    df: Dict[str, int] = {}
+    for _, _, toks in items:
+        for t in toks:
+            df[t] = df.get(t, 0) + 1
+    common = {t for t, n in df.items() if len(items) >= 5 and n / len(items) > 0.4}
+    clusters: List[dict] = []
+    for idx, (text, chs, toks) in enumerate(items):
+        key = toks - common or toks
+        best, best_score = None, 0.0
+        for c in clusters:
+            score = max((len(key & k) / min(len(key), len(k)) for k in c["keys"] if k and key),
+                        default=0.0)
+            if score > best_score:
+                best, best_score = c, score
+        if best is not None and best_score >= threshold:
+            best["members"].append((text, chs))
+            best["keys"].append(key)
+            best["chapters"].update(chs)
+        else:
+            clusters.append({"first": idx, "members": [(text, chs)], "keys": [key],
+                             "chapters": set(chs)})
+    for c in clusters:
+        # The member citing the most chapters names the theme (earliest on ties).
+        c["text"] = max(c["members"], key=lambda m: len(set(m[1])))[0]
+    ranked = sorted(clusters, key=lambda c: (-len(c["chapters"]), c["first"]))[:limit]
+    ranked.sort(key=lambda c: c["first"])
+    return [render_theme(c["text"], c["chapters"]) for c in ranked]
+
+
+def _themes_input(plan: Plan, candidates: Sequence[str]) -> str:
+    out = ["Chapters (for reference only):"]
+    out += [f"- {_chapter_label(ch)}: {ch[0].title}" for ch in plan.selected]
+    out += ["", f"Candidate themes from the batches ({len(candidates)}):"]
+    out += [f"- {c}" for c in candidates]
+    return "\n".join(out) + "\n"
+
+
+def consolidate_themes(plan: Plan, candidates: List[str], state: State, complete: CompleteFn,
+                       resume: bool = True, progress: Progress = print,
+                       ) -> Tuple[List[str], Optional[str], int, Optional[str]]:
+    """(themes, model, calls made, fallback reason). One model call over the
+    candidate bullets only; a failed, empty or chatty reply falls back to
+    `merge_themes`. With a single batch the candidates are already one view:
+    no call, just the deterministic dedupe and cap."""
+    if not candidates:
+        return [], None, 0, None
+    if len(course_map_batches(plan.selected)) <= 1:
+        return merge_themes(candidates), None, 0, None
+    cache = Path(plan.out_dir) / CHUNK_DIR / "_course_map_themes.md"
+    rec = state.data["course_map"].get("themes", {})
+    reply, model, calls = None, None, 0
+    if resume and rec.get("candidates") == list(candidates) and cache.exists():
+        reply, model = cache.read_text(encoding="utf-8"), rec.get("model")
+        progress("  skip course map themes (checkpoint)")
+    else:
+        progress(f"  run  course map themes ({len(candidates)} candidates)")
+        try:
+            reply, model = complete(THEMES_PROMPT.read_text(encoding="utf-8"),
+                                    _themes_input(plan, candidates))
+            calls = 1
+            _atomic_write(cache, reply)
+            state.update("course_map", "themes", candidates=list(candidates), model=model,
+                         finished_at=_now())
+        except (summarizer.SubscriptionExhausted, BudgetExhausted):
+            raise
+        except Exception as exc:  # noqa: BLE001 - deterministic merge instead
+            return merge_themes(candidates), None, calls, f"themes: call failed ({str(exc)[:120]})"
+    _, themes = parse_course_map(reply or "")
+    if not themes or (summarizer._CHAT_OFFER.search(reply or "") and len(themes) < 3):
+        return merge_themes(candidates), None, calls, "themes: no theme bullets in reply"
+    # Cap and drop duplicates the model left in; it already merged the rest.
+    return merge_themes(themes, threshold=0.8), model, calls, None
+
+
 def build_course_map(plan: Plan, notes_by_key: Dict[str, str], state: State,
                      complete: CompleteFn, resume: bool = True,
                      progress: Progress = print) -> Tuple[str, List[str], int, List[str]]:
     """(markdown section, models used, calls made, fallback reasons)."""
     system = COURSE_MAP_PROMPT.read_text(encoding="utf-8")
     rows: List[str] = []
-    themes: List[str] = []
+    candidates: List[str] = []
     models: List[str] = []
     calls = 0
     fallbacks: List[str] = []
@@ -1011,13 +1134,21 @@ def build_course_map(plan: Plan, notes_by_key: Dict[str, str], state: State,
                 gist = _deterministic_gist([notes_by_key[p.key] for p in ch])
             gist = notes_format.sanitize_cell(gist)
             rows.append(f"| {label} | {ch[0].title} | [{_chapter_range(ch)}] | {gist} |")
-        themes.extend(t for t in batch_themes if t not in themes)
+        candidates.extend(t for t in batch_themes if t not in candidates)
+
+    themes, theme_model, theme_calls, theme_fallback = consolidate_themes(
+        plan, candidates, state, complete, resume=resume, progress=progress)
+    calls += theme_calls
+    if theme_model:
+        models.append(theme_model)
+    if theme_fallback:
+        fallbacks.append(theme_fallback)
 
     out = [f"## {COURSE_MAP_HEADING}", "", "| # | chapter | time range | gist |",
            "|---|---|---|---|", *rows]
     if fallbacks:
-        out += ["", "> Course map: some gists are deterministic (first summary point) — "
-                + "; ".join(fallbacks)]
+        out += ["", "> Course map: some parts are deterministic (gists: first summary "
+                "point; themes: merged candidates) — " + "; ".join(fallbacks)]
     out += ["", f"### {THEMES_HEADING}", ""]
     out += [f"- {t}" for t in themes] if themes else ["- None identified"]
     return "\n".join(out) + "\n", models, calls, fallbacks
@@ -1129,6 +1260,10 @@ def _audit_line(audit: Sequence[dict]) -> Optional[str]:
         parts.append(f"{counts['retarget']} citation(s) retargeted to the caption line that states the claim")
     if counts.get("unverified"):
         parts.append(f"{counts['unverified']} marked _(unverified citation)_")
+    if counts.get("normalized"):
+        parts.append(f"{counts['normalized']} with model commentary collapsed to the valid citation")
+    if not parts:
+        return None
     return "> Citation audit: " + "; ".join(parts) + f" — see `{citations.AUDIT_FILENAME}`."
 
 
@@ -1143,7 +1278,8 @@ def _chapter_counts(plan: Plan) -> dict:
 
 
 def _source_block(plan: Plan, models: Sequence[str], partial: bool,
-                  audit: Sequence[dict] = ()) -> str:
+                  audit: Sequence[dict] = (),
+                  recorded: Optional[spoken_dates.RecordingEstimate] = None) -> str:
     m = plan.meta
     corrected = quality.corrected_path_for(plan.out_dir / "transcripts" / plan.raw_transcript.name).name
     total = sum(len(ch) for ch in plan.chapters)
@@ -1152,6 +1288,7 @@ def _source_block(plan: Plan, models: Sequence[str], partial: bool,
     lines = [
         f"# {m.title or plan.name}",
         "",
+        *([recorded.note_line(), ">"] if recorded else []),
         f"> Source: {m.url or 'unknown'}",
         f"> {prompt_header(m, plan.provenance_label)}",
         f"> Structure: {plan.structure.provenance} (rung: {plan.structure.rung}"
@@ -1177,7 +1314,11 @@ def assemble(plan: Plan, notes_by_key: Dict[str, str], course_map_md: str,
              audit: Sequence[dict] = ()) -> Tuple[str, dict]:
     """Final notes (before lint). Chapter notes are concatenated, never re-summarized."""
     partial = len(plan.selected) < len(plan.chapters)
-    blocks = [_source_block(plan, models, partial, audit), course_map_md]
+    # Recording lag (WP-F7): an INFERENCE from dates spoken in the transcript.
+    # as_of stays the published date (P4/P5 unchanged); this only warns.
+    as_of = notes_format.resolve_as_of(plan.meta)
+    recorded = spoken_dates.estimate_recording(plan.segments, as_of.date, as_of.basis)
+    blocks = [_source_block(plan, models, partial, audit, recorded), course_map_md]
     for ch in plan.selected:
         blocks.append(f"## {ch[0].title} [{_chapter_range(ch)}]\n")
         if len(ch) == 1:
@@ -1190,14 +1331,19 @@ def assemble(plan: Plan, notes_by_key: Dict[str, str], course_map_md: str,
     blocks.append(uncertainty_md)
     blocks.append(_merge_fact_checked(plan, notes_by_key))
     body = "\n".join(b.rstrip() + "\n" for b in blocks)
-    # Chunks audited before WP-F4 can still carry `[7:55:55 n/a]` (model output).
+    # Chunks audited before WP-F4 can still carry `[7:55:55 n/a]`, and before
+    # WP-F7 `[5:55:13 is not valid — see [4:55:13]]` (both model output).
+    body, normalized = citations.normalize_citation_commentary(
+        body, citations.caption_validator([s.start for s in plan.segments]))
     body = citations.normalize_citation_markers(body)[0]
 
     # Time-sensitive claims: merge -> validate(fill) -> stamp. validate MUST
     # come first: a model row without a date fails P5 otherwise.
-    as_of = notes_format.resolve_as_of(plan.meta)
     merged = notes_format.merge_time_sensitive(
         notes_format.parse_time_sensitive(notes_by_key[p.key]) for p in plan.passages)
+    # Personal session state ("resets in 9 minutes", "hit 100% usage") is not a
+    # claim about the product: moved to a dropped list logged in the state file.
+    merged, ts_dropped = notes_format.filter_ephemeral(merged)
     check = notes_format.validate_time_sensitive(merged, as_of.date, basis=as_of.basis, fill=True)
     fm = notes_format.frontmatter(
         plan.meta,
@@ -1215,17 +1361,22 @@ def assemble(plan: Plan, notes_by_key: Dict[str, str], course_map_md: str,
             **_chapter_counts(plan),
             "passages": len(plan.passages),
             "partial": partial,
+            **({"recorded_estimate": recorded.frontmatter_value()} if recorded else {}),
         },
     )
     final = notes_format.stamp_notes(body, fm, check.rows)
     info = {
         "uncertainty": uncertainty_info,
         "time_sensitive_rows": len(check.rows),
+        "time_sensitive_dropped": ts_dropped,
+        "recorded_estimate": recorded.as_dict() if recorded else None,
         "time_sensitive_findings": [f"{f.level}: {f.claim[:60]} — {f.message}" for f in check.findings],
         "citation_audit": _audit_counts(audit),
         "citations_unverified": [
             f"{e.get('passage')}: {e.get('original_ts')} {str(e.get('claim', ''))[:80]}"
             for e in audit if e.get("rule") == "citation:unverified"],
+        "citations_normalized_at_assembly": [
+            f"{e['original']} -> {e['new']}" for e in normalized],
     }
     return final, info
 
@@ -1283,10 +1434,12 @@ def _append_corrections(out_dir: Path, entries: List[dict]) -> None:
 
 
 def estimated_calls(plan: Plan, state: Optional[State] = None) -> Tuple[int, int]:
-    """(passage calls, course-map calls) still to make."""
+    """(passage calls, course-map calls) still to make. With more than one
+    batch the course map adds one themes-consolidation call."""
     todo = [p for p in plan.passages
             if state is None or not is_done(state, plan.out_dir, p)]
-    return len(todo), len(course_map_batches(plan.selected))
+    batches = len(course_map_batches(plan.selected))
+    return len(todo), batches + (1 if batches > 1 else 0)
 
 
 def describe_plan(plan: Plan, state: Optional[State] = None) -> str:
