@@ -440,8 +440,12 @@ locally.
 `"parakeet-mlx"`, `"mlx-whisper"`. Each engine transcribes one bounded wav window into the same
 `Segment`/`TranscriptResult` shape. A missing package (the MLX engines need the `asr-mlx` extra,
 Apple Silicon only) makes the backend report itself unavailable instead of failing at import.
-Short files (≤ `ASR_LONG_THRESHOLD_S`, 20 min) still go through `transcribe_audio` (faster-whisper).
-Longer files and camera-split multi-part recordings go through `core/longasr.py` (below).
+Every local file (`media`) and every caption-less download (`process`, the API) goes through
+`core/longasr.py` (below): a short clip is one window, so no recording is ever decoded whole
+to one wav (WP-F9). `process` downloads the native audio stream (no wav post-processing).
+A file whose container reports no duration is measured by decoding to the null muxer, or
+refused. Inputs under `/Volumes/` (SD cards, recorders) are refused: work from a verified
+safety copy. `ALLOW_ANTHROPIC_API=true` is required before any `anthropic/*` route is used.
 
 Measured on two 10-minute CCA-F windows (`design/ASR_BENCHMARK.md`): parakeet decodes at 40× real
 time, against 1.1–1.8× for faster-whisper large-v3 on CPU. Its content-word accuracy is about the
