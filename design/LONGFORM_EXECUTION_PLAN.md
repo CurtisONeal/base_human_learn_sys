@@ -46,7 +46,8 @@ A full run passes only if **all** hold:
 - **Do not touch** the Hermes gateway's launchd service (known-bad path; see
   `scripts/start_hermes_gateway_manual.py`).
 - **Past 14:00 Friday:** notify via `hermes send --to discord:#general` (no-model sender),
-  verify exit status, and also write the message to the vault inbox.
+  verify exit status, and also write the message to the vault inbox. **Verified delivered
+  2026-10-15 22:01 ET** (arrives as "Bob" in #general).
 
 ## Architecture changes (the "why")
 
