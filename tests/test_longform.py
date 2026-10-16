@@ -515,3 +515,26 @@ def test_correct_notes_fixes_known_forms_only():
     assert fixed.startswith("  - nested: open Claude Code now")
     assert "cloud provider" in fixed and len(findings) == 1
     assert quality.lint_notes(fixed, g) == []
+
+
+def test_about_block_shows_supplied_event_facts_but_not_youtube_descriptions():
+    """E3e review: the meetup notes never showed the event's date, venue,
+    agenda or sponsors although source_meta.json held them."""
+    from types import SimpleNamespace
+    from video2mdnotes.core.longform import _about_block
+
+    meetup = SimpleNamespace(meta=SimpleNamespace(
+        description="Event date Monday 28 September 2026, Cleveland Museum of Natural History.\n\n5:00pm-6:30pm > Networking",
+        url="https://meetu.ps/e/Q4QCV/wKlcy/i", published_at="2026-09-28",
+        published_by="Cleveland AI & Data (Meetup)"))
+    out = _about_block(meetup)
+    assert out.startswith("## About this source")
+    assert "- **Date:** 2026-09-28" in out and "Cleveland AI & Data (Meetup)" in out
+    assert "> 5:00pm-6:30pm > Networking" in out and "not derived from the recording" in out
+
+    yt = SimpleNamespace(meta=SimpleNamespace(
+        description="⭐️ Chapter ⭐️ ...", url="https://www.youtube.com/watch?v=x",
+        published_at="2026-07-20", published_by="freeCodeCamp.org"))
+    assert _about_block(yt) == ""
+    none = SimpleNamespace(meta=SimpleNamespace(description="", url="", published_at=None, published_by=None))
+    assert _about_block(none) == ""

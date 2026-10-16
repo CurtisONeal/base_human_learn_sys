@@ -1634,6 +1634,31 @@ def _source_block(plan: Plan, models: Sequence[str], partial: bool,
     return "\n".join(lines) + "\n"
 
 
+def _about_block(plan: Plan) -> str:
+    """Event facts supplied with the source (organiser page, publisher text),
+    shown verbatim and labelled — not inferred from the recording. Skipped for
+    YouTube, whose descriptions are mostly links, chapters and sponsor reads.
+    E3e review (2026-10-16): the notes never gave the meetup's date, venue,
+    agenda or sponsors although source_meta.json had all of them."""
+    meta = plan.meta
+    desc = (getattr(meta, "description", "") or "").strip()
+    url = getattr(meta, "url", "") or ""
+    if not desc or re.search(r"youtube\.com|youtu\.be", url):
+        return ""
+    out = ["## About this source", "",
+           "_From the source's own metadata (e.g. the organiser's event page), "
+           "reproduced as provided — not derived from the recording._", ""]
+    if getattr(meta, "published_at", None):
+        out.append(f"- **Date:** {meta.published_at}")
+    if getattr(meta, "published_by", None):
+        out.append(f"- **Organiser / publisher:** {meta.published_by}")
+    if url.startswith("http"):
+        out.append(f"- **Link:** {url}")
+    out.append("")
+    out += ["> " + ln if ln.strip() else ">" for ln in desc.splitlines()]
+    return "\n".join(out) + "\n"
+
+
 def assemble(plan: Plan, notes_by_key: Dict[str, str], course_map_md: str,
              models: Sequence[str], run_id: str,
              audit: Sequence[dict] = ()) -> Tuple[str, dict]:
@@ -1645,7 +1670,11 @@ def assemble(plan: Plan, notes_by_key: Dict[str, str], course_map_md: str,
     # also when the publish date is unknown (reference = the captured date).
     as_of = notes_format.resolve_as_of(plan.meta)
     recorded = spoken_dates.estimate_event(plan.segments, as_of.date, as_of.basis)
-    blocks = [_source_block(plan, models, partial, audit, recorded), course_map_md]
+    blocks = [_source_block(plan, models, partial, audit, recorded)]
+    about = _about_block(plan)
+    if about:
+        blocks.append(about)
+    blocks.append(course_map_md)
     # WP-F9 names/privacy (machine transcripts only): people named only in
     # giveaway/winner/attendee context are private — redacted, not listed;
     # every other ASR-only name in the notes is hedged at its first mention
