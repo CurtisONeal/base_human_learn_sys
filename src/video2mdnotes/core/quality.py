@@ -632,6 +632,56 @@ def lint_notes(markdown: str, glossary: Glossary) -> List[dict]:
     return findings
 
 
+def correct_notes(markdown: str, glossary: Glossary) -> Tuple[str, List[dict]]:
+    """Apply the glossary's mishearing rules to generated notes.
+
+    The fixing twin of ``lint_notes``: same paragraph blocks, same rules, so
+    ``lint_notes(correct_notes(md)[0])`` finds nothing the rules can fix.
+    Returns ``(fixed markdown, findings)``; findings have the ``lint_notes``
+    shape (``line`` is 1-based, in the INPUT). Line count is preserved.
+    """
+    rules = glossary.mishearing_rules()
+    lines = markdown.split("\n")
+    out = list(lines)
+    findings: List[dict] = []
+    block: List[int] = []
+
+    def flush() -> None:
+        if not block:
+            return
+        texts = [lines[i] for i in block]
+        new_texts, located = _correct_lines(texts, rules)
+        for mt, first, _ in located:
+            line_no = block[first]
+            findings.append(
+                {
+                    "line": line_no + 1,
+                    "found": " ".join(mt.original.split()),
+                    "suggested": " ".join(mt.corrected.split()),
+                    "rule": mt.rule.name,
+                    "context": lines[line_no].strip()[:160],
+                }
+            )
+        for i, new in zip(block, new_texts):
+            if new != lines[i]:
+                # _correct_lines strips touched lines; keep the indentation
+                # (nested bullets) of the original.
+                indent = lines[i][: len(lines[i]) - len(lines[i].lstrip())]
+                out[i] = indent + new.lstrip()
+        block.clear()
+
+    for i, line in enumerate(lines):
+        if not line.strip() or line.lstrip().startswith("#"):
+            flush()
+            if line.strip():
+                block.append(i)
+                flush()
+            continue
+        block.append(i)
+    flush()
+    return "\n".join(out), findings
+
+
 # --- per-passage uncertainty flags --------------------------------------------
 
 

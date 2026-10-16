@@ -87,6 +87,28 @@ If you add a stage that spends money or CPU, put a free check in front of it.
 
 ---
 
+## Long-form path (`core/longform.py`) — conventions
+
+- **Never re-summarize chapter notes.** Assembly concatenates them. The only
+  model call after the passages is the course-map table, and its chapter /
+  time-range columns are rendered from the skeleton, not taken from the model.
+- **Passage prompts are asserted on, not eyeballed.** `render_passage_prompt`
+  returns the exact (system, user) pair; tests check skeleton, dated header,
+  ledger, `CONTEXT ONLY` tail, per-line timestamps and the mishearing hint.
+  If you change what a passage receives, change `tests/test_longform.py` first.
+- **Split chapters: use `path[0]` and `structure.groups()`**, never
+  `chunk_sections` — it would re-merge the parts the ladder split.
+- **`validate_time_sensitive(fill=True)` before `stamp_notes`**, or P5 fails
+  on any row the model left undated.
+- **Checkpoints are the contract for resume.** A passage is done only when
+  `longform_state.json` says so AND its chunk and ledger files exist with the
+  same time range. Do not rename `chunk_summaries/<NN>_<slug>_p<i>.md` or
+  `ledger/<NN>_p<i>.json` without a migration — reruns would redo paid work.
+- **Grade with the evaluator**, not with `lint_notes`: the quality glossary and
+  `eval/glossary_default.json` are deliberately independent.
+
+---
+
 ## Before you commit
 
 ```bash

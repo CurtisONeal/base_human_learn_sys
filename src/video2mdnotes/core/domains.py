@@ -176,3 +176,65 @@ def resolve(source=None, transcript_text: str = "", explicit: Optional[str] = No
                 return DOMAINS[guess]
 
     return DOMAINS[settings.default_domain]
+
+
+# --- Long-form section profiles (core/longform.py) ---------------------------
+#
+# A long recording is summarized one passage at a time, and every passage must
+# use the SAME fixed sections so assembly can pull the cross-cutting ones
+# (uncertainty, time-sensitive claims, fact-checks) out and merge them. The
+# single-call `generic` prompt above is not used there; these lists are.
+#
+# `exam-prep` adds an exam section and is chosen only on metadata evidence
+# (title/description/tags naming an exam or certification) — a free signal,
+# like the rest of this module.
+
+LONGFORM_SECTIONS: Dict[str, List[tuple]] = {
+    "course": [
+        ("Summary",
+         "6-15 bullets: the main ideas and steps of this passage, in order, each cited."),
+        ("Key Concepts & Vocabulary",
+         "`term` - one-line definition, cited where it is introduced."),
+        ("Commands / Code / Config",
+         "Commands, code, file names, settings and config keys exactly as stated "
+         "(code in ``` fences), each with one line saying what it does. Cited."),
+        ("Special Attention",
+         "Subtle, easy-to-get-wrong or explicitly warned-about points "
+         "(gotchas, security, common mistakes). Cited."),
+        ("Transcription Uncertainty",
+         "The table described under Transcription Uncertainty below."),
+        ("Time-Sensitive Claims",
+         "The table described under Time-sensitive claims below."),
+        ("Fact-Checked Notes",
+         "Claims you can check against your own knowledge: correct / outdated / "
+         "wrong as of the published date, with the citation. `- None` if nothing."),
+    ],
+}
+LONGFORM_SECTIONS["exam-prep"] = (
+    LONGFORM_SECTIONS["course"][:3]
+    + [("Exam-relevant points",
+        "What a candidate must know for the exam from this passage: definitions, "
+        "distinctions, numbers, 'which option is best' reasoning, and anything the "
+        "speaker says is tested or commonly confused. Cited.")]
+    + LONGFORM_SECTIONS["course"][3:]
+)
+
+_EXAM_RE = re.compile(
+    r"\b(?:exams?|certifications?|certified|certificate|practice tests?|cca-f)\b",
+    re.IGNORECASE,
+)
+
+
+def longform_profile(meta=None) -> str:
+    """`exam-prep` when the source's metadata names an exam/certification, else `course`."""
+    if meta is None:
+        return "course"
+    get = meta.get if isinstance(meta, dict) else (lambda k, d=None: getattr(meta, k, d))
+    text = " ".join([get("title", "") or "", get("description", "") or "",
+                     " ".join(get("tags", []) or [])])
+    return "exam-prep" if _EXAM_RE.search(text) else "course"
+
+
+def longform_sections(profile: str) -> List[tuple]:
+    """(heading, instruction) pairs for one long-form profile, in output order."""
+    return list(LONGFORM_SECTIONS.get(profile, LONGFORM_SECTIONS["course"]))

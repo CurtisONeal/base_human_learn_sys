@@ -583,6 +583,56 @@ search, so it's asked to flag its own uncertainty rather than assert flatly). Po
 base_human_learn_sys and validated 2026-08-08 against real technical (AI Daily Brief
 podcast) and Aikido content.
 
+### Long recordings (long-form path)
+
+A transcript over `DEFAULT_MAX_WORDS` (12,000 words) no longer goes through the
+single-call prompt above — a 12-hour course is ~120k words. `process` and
+`media` route it to `core/longform.py` automatically (the short path is
+unchanged), and `longform` runs it on an **existing** run dir with no download:
+
+```bash
+# What would run: chapters, parts, passages, estimated calls. No model calls.
+python -m video2mdnotes.main longform previous_run_results/<run> --plan-only
+# Pilot on a few chapters (numbers or title substrings), into a scratch dir
+python -m video2mdnotes.main longform previous_run_results/<run> \
+    --only "1,Sessions management,7" --out /tmp/pilot
+# Everything; chapters in parallel (parts of one chapter stay sequential)
+python -m video2mdnotes.main longform previous_run_results/<run> --concurrency 3
+```
+
+What it does, in order: reads `source_meta.json` (or derives it from
+`yt_info.json`), labels the transcript's provenance, writes a glossary-corrected
+copy plus `corrections.json` (the raw transcript is never edited), cuts the
+corrected transcript with the structure ladder (chapters → description list →
+cues → windows; oversize chapters split into parts), then makes **one model
+call per passage**. Each passage prompt carries the dated source header, the
+course skeleton, every caption line with its `[H:MM:SS]`, a mishearing hint,
+the uncertainty and time-sensitive instructions; part 2+ of a split chapter
+also gets the previous part's **ledger** (concepts, corrections, open threads,
+last point — capped at 800 words, oldest dropped first) and its last ~150 s as
+`CONTEXT ONLY`. Prompts: `prompts/longform/` + `prompts/fragments/`. Exam or
+certification metadata selects the `exam-prep` section profile
+(`core/domains.py`), which adds "Exam-relevant points".
+
+**Resumable.** Each finished passage is written to
+`chunk_summaries/<NN>_<slug>_p<i>.md` and `ledger/<NN>_p<i>.json`, with status in
+`longform_state.json`. A rerun skips them and restores the ledger, so a
+`SubscriptionExhausted` / `BudgetExhausted` stop loses nothing (`--no-resume`
+redoes everything).
+
+**Assembly never re-summarizes.** The final
+`summaries/<name>.summary.md` is frontmatter (`published`, `as_of`,
+provenance, structure rung, model, run id) + a `## Course Map` (the only later
+model call: one-line gists per chapter, batched six passages per call; chapter
+and time-range columns come from the skeleton, and a chatty or failed reply
+falls back to a deterministic table) + one `## <chapter> [H:MM:SS–H:MM:SS]`
+section per chapter (`### Part i/n` for split ones) + merged
+`## Transcription Uncertainty`, `## Time-Sensitive Claims` (every row dated)
+and `## Fact-Checked Notes`. The notes are then linted against the same
+glossary; residual mishearings are fixed and logged in `corrections.json` with
+rule `notes:<rule>`. The full transcript is **not** appended (it is in
+`transcripts/`). Score a run with `scripts/eval_longform.py` (below).
+
 ## Development
 If you want to modify the code or run tests locally, you'll need a local Python environment.
 
