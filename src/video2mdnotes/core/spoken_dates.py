@@ -36,9 +36,9 @@ shown only when it lags by ``MIN_LAG_DAYS``. Always labelled an inference;
 A mention is *anchored* when a present-time anchor ("today", "tonight", "this
 week", "as of", "right now", "next time", ...) is spoken within
 ``ANCHOR_CHARS`` of it. An estimate needs lagging mentions (≥ ``MIN_LAG_DAYS``
-before the reference) that either include an anchored one or number at least
-two within ``CLUSTER_DAYS`` of each other, and that are the majority of the
-qualifying mentions. Otherwise there is no estimate.
+before the reference), clustered within ``CLUSTER_DAYS``, that include at
+least one ANCHORED mention and are the majority of the qualifying mentions.
+Unanchored repeats never suffice (WP-F9). Otherwise there is no estimate.
 """
 
 from __future__ import annotations
@@ -313,7 +313,10 @@ def estimate_recording(segments: Sequence, reference, basis: str = "published"
         if len(group) > len(best) or (len(group) == len(best) and
                                       sum(x.anchored for x in group) > sum(x.anchored for x in best)):
             best = group
-    if not (any(m.anchored for m in best) or len(best) >= 2):
+    # At least one ANCHORED mention ("April 23rd ... next time"). Repeats of
+    # an unanchored date are history told twice ("announced May 22nd"), not
+    # the recording date (F9 review (k)).
+    if not any(m.anchored for m in best):
         return None
     mid = statistics.median_low(m.date for m in best)
     return RecordingEstimate(f"{mid.year:04d}-{mid.month:02d}", reference, basis,
