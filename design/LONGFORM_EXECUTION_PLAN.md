@@ -139,7 +139,7 @@ the hard stop.
 | WP-5 | **done** — merged | 3f668e5 | notes_format.py; WP-3 MUST call validate_time_sensitive (fill) before stamp_notes or P5 fails |
 | WP-7 | folded into WP-3 | | |
 | WP-6b | **done** — merged | 1c9ce1f, 0ea99a1 | E3 ASR: 4 parts auto-grouped, parakeet 8 windows, 223 s wall, 17,507 words, gate PASS (coverage 100 %, span 99.96 %, max gap 48 s); seam-duplicate bug found+fixed; resume verified (re-stitch 1.9 s) |
-| E1 | P1–P7 PASS; **P8 FAIL** → fixes F1–F3 merged (85c026d); **E1b rerun running** | | see eval log |
+| E1 | **PASS** (E1b: P1–P7 + P8 20/20) | | see eval log; WP-F4 polish before E2 |
 | E2 | pending | | |
 | E3 | pending | | |
 
@@ -172,3 +172,7 @@ _(append each run: date, eval, P1–P8 results, cost, decision)_
 - Fresh run, 4 m 50 s, claude-cli only, $0 metered. Citation audit in-run: 3 retargets, 28 ambiguous (unchanged, logged).
 - P1 PASS 4/4 · P2 PASS 775/775 · P3 PASS · P4 PASS · P5 PASS 52/52 · P6 PASS 0 · P7 PASS 104/104.
 - P8: fresh independent reviewer running (seed 1, 20 of 331 claims) + regression checks for E1 defects.
+- **P8 PASS: 20/20 SUPPORTED** (0 partial, 0 unsupported). **E1 passes the approved bar (P1–P8).**
+- Regression checks: settings-reload and forkSession now state final observed outcome ✔; restated timestamps 9/10 ✔; tables ✔.
+- Remaining (not P8-failing): (1) audit retarget false positive 8:23:35→8:30:19 on generic words; (2) leftover `[t n/a]` markers; (3) header "of 14" vs chapters_total 13; (4) npx/cowsay outcome still misread — model interpretation of an ambiguous demo; recorded as a known limit, not code-fixable reliably; (5) an exam point drawn from Claude's generated test plan rather than an observation.
+- WP-F4 (audit precision + markers + header + wording) started before E2.
