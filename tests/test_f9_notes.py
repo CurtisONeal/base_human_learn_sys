@@ -79,3 +79,36 @@ def test_one_anchored_mention_still_estimates():
     s = _tsegs((37050, "my usage resets April 23rd 5:00 pm, so next time we continue"))
     est = sd.estimate_recording(s, "2026-07-20")
     assert est is not None and est.month == "2026-04"
+
+
+# --- (l) citation-repair leak variants (real E2c strings) -----------------------
+
+E2C_LEAKS = [
+    ("- Claude routes around denied tools. Glob [8:58:25 is not used — see below]",
+     "- Claude routes around denied tools. Glob [8:58:25]"),
+    ("- `Validation-retry feedback loop` - specific validation errors are fed back into "
+     "the loop so the model can correct itself, with a cap on retries [9:37:41 not used] ",
+     "- `Validation-retry feedback loop` - specific validation errors are fed back into "
+     "the loop so the model can correct itself, with a cap on retries [9:37:41] "),
+    ("- Validation-retry: add specific validation errors to the prompt and retry, and "
+     "limit the number of retries [9:39:33 not used]",
+     "- Validation-retry: add specific validation errors to the prompt and retry, and "
+     "limit the number of retries [9:39:33]"),
+    ("- Glob was used instead [8:58:25] — see below", "- Glob was used instead [8:58:25]"),
+    ("- x [1:02:03 (approximate, the caption is garbled)]", "- x [1:02:03]"),
+]
+
+
+@pytest.mark.parametrize("leak,fixed", E2C_LEAKS)
+def test_e2c_bracket_commentary_variants_collapse(leak, fixed):
+    from video2mdnotes.core import citations as cit
+    out, entries = cit.normalize_citation_commentary(leak)
+    assert out == fixed
+    assert entries and all(e["rule"] == "citation:normalized" for e in entries)
+
+
+def test_generic_rule_leaves_ranges_and_real_see_references():
+    from video2mdnotes.core import citations as cit
+    text = ("- ok [1:00:00] and [1:00:05–1:00:09] and [1:00:05 - 1:00:09] and "
+            "[0:01:00 to 0:02:00] fine (see [1:00:10]); see chapter 3")
+    assert cit.normalize_citation_commentary(text) == (text, [])
