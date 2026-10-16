@@ -1,0 +1,99 @@
+{
+  "domain": "claude",
+  "description": "Anthropic / Claude product names as auto-captions and ASR mishear them. Authored for core/quality.py from observed caption errors; deliberately independent of the evaluator's glossary (eval/glossary_default.json), which grades this pass and must not be copied into it. Every rule names an explicit wrong form plus a product context. A bare 'cloud' is never rewritten: 'cloud provider', 'cloud computing', 'AWS cloud', 'in the cloud' are real usage.",
+  "match_keywords": ["claude", "anthropic", "claude code", "cca-f"],
+  "terms": [
+    "Claude", "Claude Code", "CLAUDE.md", "Claude Agent SDK", "Anthropic",
+    "Claude Desktop", "Claude Sonnet", "Claude Opus", "Claude Haiku"
+  ],
+  "syntax": "match: case-insensitive regex; {_} = a word gap that may cross a caption-line break and may contain fillers (uh/um). Word boundaries are added automatically. not_before / not_after / require_after are regexes tested against the text immediately before (anchored at its end) or after (anchored at its start) the match. replace: canonical text; when it has as many words as the match (fillers excluded) each word is swapped in place, so a phrase split across lines stays split across the same lines.",
+  "rules": [
+    {
+      "name": "claude-auth-cli",
+      "match": "(?:clawed|cloth|claw|cloud|claude){_}off{_}(status|login|logout)",
+      "replace": "claude auth \\1",
+      "note": "`claude auth status` heard as 'clawed off status'. Only fires before a CLI verb, so the idiom 'clawed off' is untouched."
+    },
+    {
+      "name": "claude-md",
+      "match": "(?:cloud|clawed|claw|clot)(?:\\s*\\.\\s*|{_})m?md",
+      "replace": "CLAUDE.md"
+    },
+    {
+      "name": "claude-agent-sdk",
+      "match": "(?:cloud|clawed|claw|clot|cla){_}agents?{_}sdk",
+      "replace": "Claude Agent SDK"
+    },
+    {
+      "name": "claude-agent-options",
+      "match": "(?:cloud|clawed|claw|clot|cla){_}agent{_}options",
+      "replace": "Claude Agent options",
+      "note": "the SDK's ClaudeAgentOptions"
+    },
+    {
+      "name": "claude-code-plural-as-name",
+      "match": "(?:cloud|clawed|claw|cla){_}codes",
+      "require_after": "^\\s+(?:with|in|on|to|and|or|for|is|are|was)\\b",
+      "replace": "Claude Code"
+    },
+    {
+      "name": "claude-code-possessive",
+      "match": "(?:cloud|clawed|claw|cla){_}codes",
+      "replace": "Claude Code's"
+    },
+    {
+      "name": "claude-code",
+      "match": "(?:cloud|clawed|claw|cla){_}code",
+      "not_before": "\\b(?:google|gcp|aws|azure|amazon)\\s+$",
+      "replace": "Claude Code",
+      "note": "'Google Cloud Code' is a real Google product and is left alone."
+    },
+    {
+      "name": "claude-sonnet",
+      "match": "(?:cloud|clawed|claw){_}sonnet",
+      "replace": "Claude Sonnet"
+    },
+    {
+      "name": "claude-opus",
+      "match": "(?:cloud|clawed|claw){_}opus",
+      "replace": "Claude Opus"
+    },
+    {
+      "name": "claude-haiku",
+      "match": "(?:cloud|clawed|claw){_}haiku",
+      "replace": "Claude Haiku"
+    },
+    {
+      "name": "claude-desktop",
+      "match": "(?:cloud|clawed|claw){_}desktop",
+      "not_before": "\\b(?:virtual|remote|windows|azure|aws|amazon|citrix)\\s+$",
+      "replace": "Claude Desktop",
+      "note": "'virtual cloud desktop' / 'Azure cloud desktop' are real usage."
+    },
+    {
+      "name": "claude-docs-domain",
+      "match": "code\\.cloud\\.com",
+      "replace": "code.claude.com"
+    },
+    {
+      "name": "claude-split-word",
+      "match": "claw{_}de",
+      "replace": "Claude",
+      "note": "'Claude' split into two cues: 'claw de decomposes'."
+    },
+    {
+      "name": "clawed-product",
+      "match": "clawed",
+      "require_after": "^\\s+(?:code|codes|agent|agents|api|sdk|md|github|app|desktop|ai|models?|cli|sonnet|opus|haiku|chat|web|extracts|says|generates|creates)\\b",
+      "replace": "Claude"
+    },
+    {
+      "name": "clawed-standalone",
+      "match": "clawed",
+      "not_after": "^\\s+(?:off|back|at|its|his|her|their|my|your|our|through|into|onto|out|up|down|away|way|him|them|me|us|it|the|a|an|open|apart|forward|ahead|across|past|over|along)\\b",
+      "not_before": "\\b(?:he|she|they|we|i|cat|cats|dog|dogs|kitten|kittens|bear|bears|lion|lions|tiger|tigers|animal|animals|bird|birds|who|had|has|have|having|been|got|get|gets)\\s+$",
+      "replace": "Claude",
+      "note": "Only in a Claude-domain run (this glossary is selected by metadata). Verb usage — 'clawed back', 'clawed its way', 'the cat clawed the sofa' — is excluded by the neighbour tests."
+    }
+  ]
+}
