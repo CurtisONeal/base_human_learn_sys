@@ -125,12 +125,12 @@ the hard stop.
 | WP | Status | Commit | Notes |
 |---|---|---|---|
 | Safety copies | in progress | — | `~/Movies/CLE-AI-26_09_safety_copies/`, SHA256SUMS.txt |
-| WP-0 | pending | | |
-| WP-1 | pending | | |
-| WP-6a | pending | | |
+| WP-0 | in progress (agent, worktree) | | started 2026-10-15 ~22:00 ET |
+| WP-1 | in progress (agent, worktree) | | started 2026-10-15 ~22:00 ET |
+| WP-6a | in progress (agent, worktree) | | started 2026-10-15 ~22:00 ET |
 | WP-2 | pending | | |
 | WP-4 | pending | | |
-| WP-8 | pending | | |
+| WP-8 | in progress (agent, worktree) | | started 2026-10-15 ~22:00 ET |
 | WP-3 | pending | | |
 | WP-5 | pending | | |
 | WP-7 | pending | | |
