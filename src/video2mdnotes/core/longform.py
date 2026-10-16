@@ -46,7 +46,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from video2mdnotes.config import BASE_DIR
-from video2mdnotes.core import domains, notes_format, quality, summarizer
+from video2mdnotes.core import citations, domains, notes_format, quality, summarizer
 from video2mdnotes.core.chunking import DEFAULT_MAX_WORDS
 from video2mdnotes.core.costs import BudgetExhausted, current_run_id
 from video2mdnotes.core.metadata import META_FILENAME, SourceMeta, from_ytdlp_info, prompt_header
@@ -417,7 +417,9 @@ def render_passage_prompt(
     if passage.part > 1 and ledger_in is not None:
         blocks.append(
             f"RUNNING LEDGER from part {passage.part - 1}/{passage.parts} of this "
-            "chapter (already covered — build on it, carry it forward):\n"
+            "chapter (already covered — build on it, carry it forward; an entry with "
+            '"status": "expected" was not shown to work, "superseded" was later '
+            "corrected — never restate either as an observed fact):\n"
             "```json\n" + json.dumps(ledger_in, indent=2, ensure_ascii=False) + "\n```"
         )
     if passage.part > 1 and prev is not None:
@@ -442,29 +444,71 @@ def _ledger_words(ledger: dict) -> int:
     n = 0
     for c in ledger.get("concepts", []):
         n += len(str(c.get("term", "")).split()) + len(str(c.get("definition", "")).split())
+    for c in ledger.get("claims", []):
+        n += len(str(c.get("claim", "")).split()) + 2
     for key in ("terms_and_corrections", "open_threads"):
         n += sum(len(str(x).split()) for x in ledger.get(key, []))
     n += len(str(ledger.get("last_point", "")).split())
     return n
 
 
+LEDGER_STATUSES = ("observed", "expected", "superseded")
+_STATUS_ALIASES = {
+    "observed": "observed", "confirmed": "observed", "verified": "observed", "shown": "observed",
+    "fact": "observed", "expected": "expected", "attempted": "expected", "predicted": "expected",
+    "unverified": "expected", "intended": "expected", "superseded": "superseded",
+    "corrected": "superseded", "contradicted": "superseded", "retracted": "superseded",
+}
+
+
+def _status(value) -> Optional[str]:
+    """A ledger status, normalized; None when absent or unrecognized (old
+    ledgers have none — never invent one)."""
+    key = re.sub(r"[^a-z]", "", str(value or "").lower())
+    return _STATUS_ALIASES.get(key)
+
+
 def normalize_ledger(raw) -> dict:
+    """Ledger in the current schema. Backward compatible: ledgers written
+    before WP-F2 have no `claims` and no `status` — they parse unchanged, and
+    no status is invented for their concepts."""
     raw = raw if isinstance(raw, dict) else {}
     concepts = []
     for c in raw.get("concepts") or []:
         if isinstance(c, dict):
             term = str(c.get("term", "")).strip()
             if term:
-                concepts.append({"term": term, "definition": str(c.get("definition", "")).strip()})
+                entry = {"term": term, "definition": str(c.get("definition", "")).strip()}
+                st = _status(c.get("status"))
+                if st:
+                    entry["status"] = st
+                concepts.append(entry)
         elif str(c).strip():
             term, _, definition = str(c).partition(" - ")
             concepts.append({"term": term.strip(), "definition": definition.strip()})
+    claims = []
+    for c in raw.get("claims") or []:
+        if isinstance(c, dict):
+            text = str(c.get("claim") or c.get("text") or "").strip()
+            if not text:
+                continue
+            # A claim with no recognizable status was not shown to be observed.
+            entry = {"claim": text, "status": _status(c.get("status")) or "expected"}
+            ts = str(c.get("ts") or c.get("timestamp") or "").strip()
+            if ts:
+                entry["ts"] = ts
+            if c.get("superseded_by"):
+                entry["superseded_by"] = str(c["superseded_by"]).strip()
+            claims.append(entry)
+        elif str(c).strip():
+            claims.append({"claim": str(c).strip(), "status": "expected"})
 
     def strings(key):
         return [str(x).strip() for x in (raw.get(key) or []) if str(x).strip()]
 
     return {
         "concepts": concepts,
+        "claims": claims,
         "terms_and_corrections": strings("terms_and_corrections"),
         "open_threads": strings("open_threads"),
         "last_point": str(raw.get("last_point") or "").strip(),
@@ -474,13 +518,18 @@ def normalize_ledger(raw) -> dict:
 def cap_ledger(ledger: dict, max_words: int = LEDGER_MAX_WORDS) -> Tuple[dict, int]:
     """Bound a ledger to `max_words`, dropping the OLDEST entries first.
 
-    Deterministic: concepts are dropped from the front, then
-    terms_and_corrections, then open_threads; if `last_point` alone is still
+    Deterministic: superseded claims go first, then concepts from the front,
+    then claims, terms_and_corrections, open_threads; if `last_point` alone is still
     over, its words are truncated from the start. Returns (ledger, dropped).
     """
     led = normalize_ledger(ledger)
     dropped = 0
-    for key in ("concepts", "terms_and_corrections", "open_threads"):
+    while _ledger_words(led) > max_words and any(
+            c.get("status") == "superseded" for c in led["claims"]):
+        idx = next(i for i, c in enumerate(led["claims"]) if c.get("status") == "superseded")
+        led["claims"].pop(idx)
+        dropped += 1
+    for key in ("concepts", "claims", "terms_and_corrections", "open_threads"):
         while _ledger_words(led) > max_words and led[key]:
             led[key].pop(0)
             dropped += 1
@@ -644,6 +693,65 @@ def is_done(state: State, out_dir: Path, p: Passage) -> bool:
     )
 
 
+# --- citation audit (WP-F1) -------------------------------------------------------
+
+
+def passage_caption_lines(plan: Plan, p: Passage) -> List[Tuple[float, str]]:
+    """(start, text) of the passage's own corrected caption lines (no overlap)."""
+    a, b = p.span
+    return [(s.start, " ".join(s.text.split())) for s in plan.segments[a:b]]
+
+
+def audit_passage_notes(plan: Plan, p: Passage, notes: str) -> Tuple[str, List[dict]]:
+    audited, entries = citations.audit_notes(notes, passage_caption_lines(plan, p))
+    for e in entries:
+        e["passage"] = p.key
+    return audited, entries
+
+
+def _audit_counts(entries: Sequence[dict]) -> dict:
+    out: Dict[str, int] = {}
+    for e in entries:
+        key = str(e.get("rule", "")).split(":", 1)[-1]
+        out[key] = out.get(key, 0) + 1
+    return out
+
+
+_AUDIT_LOCK = threading.Lock()
+
+
+def record_citation_audit(out_dir: Path, p: Passage, entries: List[dict]) -> Path:
+    """citation_audit.json: this passage's entries replace any earlier ones."""
+    path = Path(out_dir) / citations.AUDIT_FILENAME
+    with _AUDIT_LOCK:
+        data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+        data = [e for e in data if e.get("passage") != p.key] + list(entries)
+        _atomic_write(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+    return path
+
+
+def reaudit_chunks(run_dir: Path, out_dir: Optional[Path] = None, *,
+                   max_words: int = DEFAULT_MAX_WORDS, write: bool = True) -> List[dict]:
+    """Re-run the citation audit over the chunk notes already on disk (no model
+    calls). Rewrites chunk_summaries/<key>.md and citation_audit.json when
+    `write`; returns every log entry. Re-auditing audited notes is a no-op."""
+    plan = build_plan(run_dir, out_dir, max_words=max_words, write=False)
+    entries_all: List[dict] = []
+    for ch in plan.chapters:
+        for p in ch:
+            path = chunk_path(plan.out_dir, p)
+            if not path.exists():
+                continue
+            notes = path.read_text(encoding="utf-8")
+            audited, entries = audit_passage_notes(plan, p, notes)
+            entries_all.extend(entries)
+            if write:
+                if audited != notes:
+                    _atomic_write(path, audited)
+                record_citation_audit(plan.out_dir, p, entries)
+    return entries_all
+
+
 # --- running passages ------------------------------------------------------------
 
 
@@ -697,6 +805,10 @@ def _run_chapter(plan: Plan, chapter: List[Passage], state: State, complete: Com
             raise
         notes, led, err = extract_ledger(output)
         notes = summarizer._strip_chat_preamble(notes).rstrip() + "\n"
+        # Audit citations before the checkpoint, so chunk_summaries/ holds
+        # audited notes (WP-F1).
+        notes, audit = audit_passage_notes(plan, p, notes)
+        record_citation_audit(plan.out_dir, p, audit)
         source = "model"
         if led is None:
             led, source = _fallback_ledger(ledger, notes), f"fallback ({err})"
@@ -706,6 +818,7 @@ def _run_chapter(plan: Plan, chapter: List[Passage], state: State, complete: Com
                       json.dumps(led, indent=2, ensure_ascii=False) + "\n")
         state.update("passages", p.key, status="done", model=model, finished_at=_now(),
                      ledger_words=_ledger_words(led), ledger_dropped=dropped,
+                     citation_audit=_audit_counts(audit),
                      ledger_source=source, notes_words=len(notes.split()),
                      error=None, stopped=None)
         with state.lock:
@@ -896,7 +1009,7 @@ def build_course_map(plan: Plan, notes_by_key: Dict[str, str], state: State,
             gist = gists.get(label) or gists.get("t:" + _norm(ch[0].title))
             if not gist:
                 gist = _deterministic_gist([notes_by_key[p.key] for p in ch])
-            gist = gist.replace("|", "/")
+            gist = notes_format.sanitize_cell(gist)
             rows.append(f"| {label} | {ch[0].title} | [{_chapter_range(ch)}] | {gist} |")
         themes.extend(t for t in batch_themes if t not in themes)
 
@@ -934,8 +1047,9 @@ def _merge_uncertainty(plan: Plan, notes_by_key: Dict[str, str]) -> Tuple[str, d
     out = [f"## {UNCERTAINTY}", ""]
     if rows:
         out += ["| timestamp | heard | probable | confidence |", "|---|---|---|---|"]
-        out += [f"| [{it['timestamp']}] | {it['heard'].replace('|', '/')} | "
-                f"{it['probable'].replace('|', '/')} | {it['confidence']} |" for it in rows]
+        cell = notes_format.sanitize_cell
+        out += [f"| [{it['timestamp']}] | {cell(it['heard'])} | "
+                f"{cell(it['probable'])} | {cell(it['confidence'])} |" for it in rows]
     else:
         out.append("- None flagged by the passages.")
     notes = []
@@ -949,6 +1063,35 @@ def _merge_uncertainty(plan: Plan, notes_by_key: Dict[str, str]) -> Tuple[str, d
     return "\n".join(out) + "\n", {"rows": len(rows), "glossary_known": known, "omitted": omitted}
 
 
+MODEL_KNOWLEDGE = "per model knowledge (cutoff uncertain)"
+
+
+def fix_fact_checked_wording(text: str, meta: SourceMeta) -> str:
+    """Model-knowledge checks never claim "correct as of <published date>"
+    (WP-F3): the model cannot know what was true on that date. Rewrites that
+    phrase (and its usual tails) to `correct per model knowledge (cutoff
+    uncertain)`. Other dates — a date the speaker gave — are left alone."""
+    dates = set()
+    as_of = notes_format.resolve_as_of(meta)
+    if as_of.date:
+        dates.add(str(as_of.date))
+    if meta.published_at:
+        dates.add(str(meta.published_at)[:10])
+    if not dates:
+        return text
+    alt = "|".join(re.escape(d) for d in sorted(dates))
+    pat = re.compile(
+        rf"\b(?:is\s+)?correct\s+as\s+of\s+(?:{alt})(?:\s*\(captured\))?"
+        rf"(?:\s+(?:according\s+to\s+my\s+knowledge|as\s+far\s+as\s+I\s+can\s+tell))?"
+        rf"(?:\s*[;,]\s*may\s+have\s+changed\s+since)?",
+        re.I)
+
+    def sub(m):
+        lead = "is " if m.group(0).lower().startswith("is") else ""
+        return f"{lead}correct {MODEL_KNOWLEDGE}"
+    return pat.sub(sub, text)
+
+
 def _merge_fact_checked(plan: Plan, notes_by_key: Dict[str, str]) -> str:
     out = [f"## {FACT_CHECKED}", ""]
     any_body = False
@@ -957,6 +1100,7 @@ def _merge_fact_checked(plan: Plan, notes_by_key: Dict[str, str]) -> str:
         for p in ch:
             body = section_body(notes_by_key[p.key], FACT_CHECKED)
             if body and not _is_none(body):
+                body = fix_fact_checked_wording(body, plan.meta)
                 lead, secs = split_sections(body)
                 bodies.append(shift_headings(body, 4 - (secs[0][1] if secs else 4)).strip())
         if bodies:
@@ -967,7 +1111,29 @@ def _merge_fact_checked(plan: Plan, notes_by_key: Dict[str, str]) -> str:
     return "\n".join(out).rstrip() + "\n"
 
 
-def _source_block(plan: Plan, models: Sequence[str], partial: bool) -> str:
+def load_citation_audit(out_dir: Path, keys: Optional[Sequence[str]] = None) -> List[dict]:
+    path = Path(out_dir) / citations.AUDIT_FILENAME
+    if not path.exists():
+        return []
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return [e for e in data if keys is None or e.get("passage") in keys]
+
+
+def _audit_line(audit: Sequence[dict]) -> Optional[str]:
+    changed = [e for e in audit if e.get("changed", True)]
+    if not changed:
+        return None
+    counts = _audit_counts(changed)
+    parts = []
+    if counts.get("retarget"):
+        parts.append(f"{counts['retarget']} citation(s) retargeted to the caption line that states the claim")
+    if counts.get("unverified"):
+        parts.append(f"{counts['unverified']} marked _(unverified citation)_")
+    return "> Citation audit: " + "; ".join(parts) + f" — see `{citations.AUDIT_FILENAME}`."
+
+
+def _source_block(plan: Plan, models: Sequence[str], partial: bool,
+                  audit: Sequence[dict] = ()) -> str:
     m = plan.meta
     corrected = quality.corrected_path_for(plan.out_dir / "transcripts" / plan.raw_transcript.name).name
     total = sum(len(ch) for ch in plan.chapters)
@@ -985,16 +1151,20 @@ def _source_block(plan: Plan, models: Sequence[str], partial: bool) -> str:
         f"corrections, logged in `corrections.json`); raw `transcripts/{plan.raw_transcript.name}` "
         "is kept unmodified. The full transcript is not appended to these notes.",
     ]
+    audit_line = _audit_line(audit)
+    if audit_line:
+        lines.append(audit_line)
     if partial:
         lines.append("> **Partial run** (`--only`): only the chapters below were summarized.")
     return "\n".join(lines) + "\n"
 
 
 def assemble(plan: Plan, notes_by_key: Dict[str, str], course_map_md: str,
-             models: Sequence[str], run_id: str) -> Tuple[str, dict]:
+             models: Sequence[str], run_id: str,
+             audit: Sequence[dict] = ()) -> Tuple[str, dict]:
     """Final notes (before lint). Chapter notes are concatenated, never re-summarized."""
     partial = len(plan.selected) < len(plan.chapters)
-    blocks = [_source_block(plan, models, partial), course_map_md]
+    blocks = [_source_block(plan, models, partial, audit), course_map_md]
     for ch in plan.selected:
         blocks.append(f"## {ch[0].title} [{_chapter_range(ch)}]\n")
         if len(ch) == 1:
@@ -1026,8 +1196,10 @@ def assemble(plan: Plan, notes_by_key: Dict[str, str], course_map_md: str,
             "structure_detail": plan.structure.provenance,
             "structure_is_inferred": plan.structure.structure_is_inferred,
             "longform_profile": plan.profile,
-            "chapters_total": len(plan.chapters),
-            "chapters_included": len(plan.selected),
+            # The preamble is not a chapter (WP-F3): E1 said 14 for 13 chapters.
+            "chapters_total": sum(1 for ch in plan.chapters if ch[0].chapter_no),
+            "chapters_included": sum(1 for ch in plan.selected if ch[0].chapter_no),
+            "preamble_included": any(ch[0].chapter_no == 0 for ch in plan.selected),
             "passages": len(plan.passages),
             "partial": partial,
         },
@@ -1037,6 +1209,10 @@ def assemble(plan: Plan, notes_by_key: Dict[str, str], course_map_md: str,
         "uncertainty": uncertainty_info,
         "time_sensitive_rows": len(check.rows),
         "time_sensitive_findings": [f"{f.level}: {f.claim[:60]} — {f.message}" for f in check.findings],
+        "citation_audit": _audit_counts(audit),
+        "citations_unverified": [
+            f"{e.get('passage')}: {e.get('original_ts')} {str(e.get('claim', ''))[:80]}"
+            for e in audit if e.get("rule") == "citation:unverified"],
     }
     return final, info
 
@@ -1165,7 +1341,8 @@ def run_longform(
     models += map_models
 
     run_id = state.data.get("run_id") or current_run_id()
-    final, info = assemble(plan, notes_by_key, course_map_md, models, run_id)
+    audit = load_citation_audit(plan.out_dir, [p.key for p in plan.passages])
+    final, info = assemble(plan, notes_by_key, course_map_md, models, run_id, audit=audit)
     summary_name = f"{plan.name}.summary.md"
     fixed, logged, residual = lint_and_fix(plan, final, summary_name)
     _append_corrections(plan.out_dir, logged)

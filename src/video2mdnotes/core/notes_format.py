@@ -432,8 +432,31 @@ def merge_time_sensitive(tables: Iterable[Iterable[ClaimRow]]) -> List[ClaimRow]
 # --- rendering + stamping ------------------------------------------------------
 
 
+_UNESCAPED_PIPE = re.compile(r"(?<!\\)\|")
+
+
+def sanitize_cell(text: str) -> str:
+    """One markdown table cell that cannot break its row (WP-F3).
+
+    Newlines become spaces; unescaped `|` is escaped; an odd backtick (a
+    code span the model or a parser cut in half) is dropped so it cannot
+    swallow the rest of the row; an unclosed double quote is closed.
+    """
+    s = " ".join(str(text or "").split())
+    s = _UNESCAPED_PIPE.sub(r"\\|", s)
+    if s.count("`") % 2:
+        k = s.rfind("`")
+        s = (s[:k] + s[k + 1:]).strip()
+    if s.count('"') % 2:
+        s += '"'
+    missing = s.count("\u201c") - s.count("\u201d")
+    if missing > 0:
+        s += "\u201d" * missing
+    return s
+
+
 def _cell(text: str) -> str:
-    return (text or "").replace("|", "\\|").replace("\n", " ").strip()
+    return sanitize_cell(text)
 
 
 def render_time_sensitive(rows: Sequence[ClaimRow], level: int = 2) -> str:
@@ -499,6 +522,7 @@ def stamp_notes(
 __all__ = [
     "AsOf", "ClaimRow", "Finding", "TimeSensitiveCheck", "CLAIM_TYPES", "COLUMNS",
     "TIME_SENSITIVE_FRAGMENT", "frontmatter", "merge_time_sensitive",
-    "parse_time_sensitive", "render_time_sensitive", "resolve_as_of", "stamp_notes",
+    "parse_time_sensitive", "render_time_sensitive", "resolve_as_of", "sanitize_cell",
+    "stamp_notes",
     "time_sensitive_fragment", "validate_time_sensitive",
 ]

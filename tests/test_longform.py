@@ -226,7 +226,7 @@ def test_extract_ledger_parses_and_strips():
     out = "### Summary\n- a [0:00:01]\n\n```ledger\n{\"concepts\": [{\"term\": \"t\", \"definition\": \"d\"}], \"last_point\": \"x\"}\n```\n"
     notes, led, err = lf.extract_ledger(out)
     assert err is None and "```ledger" not in notes and "### Summary" in notes
-    assert led == {"concepts": [{"term": "t", "definition": "d"}],
+    assert led == {"concepts": [{"term": "t", "definition": "d"}], "claims": [],
                    "terms_and_corrections": [], "open_threads": [], "last_point": "x"}
 
 

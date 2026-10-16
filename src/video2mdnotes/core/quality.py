@@ -729,8 +729,28 @@ def _norm_ts(raw: str) -> Optional[str]:
     return fmt_hms(parse_ts(raw))
 
 
+_WRAPPERS = (("`", "`"), ('"', '"'), ("'", "'"), ("**", "**"), ("*", "*"), ("“", "”"))
+
+
 def _clean(cell: str) -> str:
-    return cell.strip().strip("`\"'*_“”").strip()
+    """Strip wrapping quotes / backticks / emphasis — only when they wrap the
+    WHOLE cell. Stripping them one-sidedly cut `` `__init__`, formatter `` to
+    ``init__`, formatter`` and broke the E1 uncertainty table."""
+    s = cell.strip()
+    changed = True
+    while changed and len(s) >= 2:
+        changed = False
+        for a, b in _WRAPPERS:
+            if len(s) > len(a) + len(b) and s.startswith(a) and s.endswith(b):
+                inner = s[len(a):len(s) - len(b)]
+                if a == "`" and "`" in inner:
+                    continue          # two code spans, not one wrapped cell
+                if a in ('"', "'") and a in inner:
+                    continue
+                s = inner.strip()
+                changed = True
+                break
+    return s
 
 
 def parse_uncertainty_section(markdown: str) -> Optional[List[dict]]:

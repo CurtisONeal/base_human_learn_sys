@@ -20,6 +20,11 @@ Output exactly two things and nothing else:
    that recur across the chapters given (cite the chapter numbers, e.g.
    "(ch. 2, 5)").
 
+   - A theme names a TOPIC, never a verdict or conclusion about it: write
+     "Testing permission rules with live demos (ch. 6, 7)", not "Permission
+     rules don't work as documented" or "Settings need a restart". Outcomes
+     belong in the chapter notes, where they are cited and may be superseded.
+
 Rules: work only from the notes given; add nothing that is not in them. No
 preamble, no closing remarks, no questions. The first line of your reply is the
 table header.
