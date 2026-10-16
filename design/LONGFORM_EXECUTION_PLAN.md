@@ -153,3 +153,14 @@ _(append each run: date, eval, P1–P8 results, cost, decision)_
 - P1 PASS 4/4 · P2 PASS 809/809 · P3 PASS 99.996 % · P4 PASS · P5 PASS 50/50 · P6 PASS 0 · P7 PASS 104/104.
   (First grading showed P1 FAIL — the managing agent's expected-chapters grep produced an empty file; regraded with a correct file.)
 - P8: independent reviewer running (20 of 343 cited claims). Also checking split-chapter continuity.
+- **P8 FAIL** (independent reviewer): 18 SUPPORTED · 1 PARTIAL · 1 UNSUPPORTED. Continuity of split chapter: PASS (no loss/dup at 8:19:35; Part 2 builds on Part 1; minor redundancy).
+  - C06 UNSUPPORTED: restated bullet in Special Attention cites [8:09:43]; the event is at 7:59:31 (Summary cites it correctly). Sibling bullet "Glob instead of ls [8:04:58]" same defect.
+  - C19 PARTIAL: "`Bash(npx *)` fixed the match" — speaker only expected it; the observed run contradicts it. Overstatement originated in ledger 07_p2.
+  - Learner defects: earlier wrong conclusions taught as fact in body/themes while only Fact-Checked has the correction (forkSession; "restart to reload settings" vs observed immediate effect); broken table cells; chapters_total counts preamble; Fact-Checked says "correct as of <published>" for model-knowledge checks.
+
+#### Failure-loop fix packages (architected 2026-10-15 ~23:00 ET)
+| WP | Root cause | Fix | Acceptance |
+|---|---|---|---|
+| WP-F1 | Model approximates timestamps when it restates an item in a later section | Prompt rule: restated items reuse the original citation; cite the caption line that states the claim. Deterministic **citation audit** after each passage: salient terms of each cited bullet (code spans, tool/command names, rare tokens) must appear within ±60 s of the cited time; if absent but uniquely present elsewhere in the passage → retarget (logged `citation:retarget`); if absent everywhere → mark bullet `(unverified citation)` and list in report | Replay E1 notes: C06 and the Glob bullet retargeted to 7:59:31 / 7:58:24; unit tests incl. no false retarget |
+| WP-F2 | Expected outcomes stated as observed; later corrections not reconciled outside Fact-Checked; ledger propagates wrong conclusions | Prompt "outcome discipline": distinguish attempted/expected vs observed; when the speaker later corrects/contradicts, Summary/Special Attention/claims state the final observed outcome and mark the earlier one superseded. Ledger entries get `status: observed|expected|superseded`. Course map themes limited to topics, not verdicts. Time-sensitive rows contradicted later get flagged | Rendered prompt contains rules; ledger schema test; E1 rerun reviewer finds no expected-as-observed |
+| WP-F3 | Cosmetic | Sanitize table cells (pipes, backticks, quotes); `chapters_total` excludes preamble; Fact-Checked wording for model-knowledge = "per model knowledge (cutoff uncertain)" not "as of <published>" | Unit tests |
