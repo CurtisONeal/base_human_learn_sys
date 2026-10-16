@@ -139,7 +139,7 @@ the hard stop.
 | WP-5 | **done** — merged | 3f668e5 | notes_format.py; WP-3 MUST call validate_time_sensitive (fill) before stamp_notes or P5 fails |
 | WP-7 | folded into WP-3 | | |
 | WP-6b | in progress (agent, worktree) | | parakeet primary; ends with E3 transcription of the 4-part meetup (no LLM) |
-| E1 | P1–P7 PASS; P8 under review | | see eval log |
+| E1 | P1–P7 PASS; **P8 FAIL** → fixes F1–F3 merged (85c026d); **E1b rerun running** | | see eval log |
 | E2 | pending | | |
 | E3 | pending | | |
 
@@ -164,3 +164,6 @@ _(append each run: date, eval, P1–P8 results, cost, decision)_
 | WP-F1 | Model approximates timestamps when it restates an item in a later section | Prompt rule: restated items reuse the original citation; cite the caption line that states the claim. Deterministic **citation audit** after each passage: salient terms of each cited bullet (code spans, tool/command names, rare tokens) must appear within ±60 s of the cited time; if absent but uniquely present elsewhere in the passage → retarget (logged `citation:retarget`); if absent everywhere → mark bullet `(unverified citation)` and list in report | Replay E1 notes: C06 and the Glob bullet retargeted to 7:59:31 / 7:58:24; unit tests incl. no false retarget |
 | WP-F2 | Expected outcomes stated as observed; later corrections not reconciled outside Fact-Checked; ledger propagates wrong conclusions | Prompt "outcome discipline": distinguish attempted/expected vs observed; when the speaker later corrects/contradicts, Summary/Special Attention/claims state the final observed outcome and mark the earlier one superseded. Ledger entries get `status: observed|expected|superseded`. Course map themes limited to topics, not verdicts. Time-sensitive rows contradicted later get flagged | Rendered prompt contains rules; ledger schema test; E1 rerun reviewer finds no expected-as-observed |
 | WP-F3 | Cosmetic | Sanitize table cells (pipes, backticks, quotes); `chapters_total` excludes preamble; Fact-Checked wording for model-knowledge = "per model knowledge (cutoff uncertain)" not "as of <published>" | Unit tests |
+
+- Fixes merged 85c026d (545 pass). Replay of citation audit on E1 notes retargets exactly the 2 flagged citations (→7:58:25, 7:59:35), 26 ambiguous logged unchanged.
+- E1b: fresh rerun (`--no-resume`) of chapters 1,2,6,7 → previous_run_results/E1b_cca_f_pilot, P8 sample seed 1.
