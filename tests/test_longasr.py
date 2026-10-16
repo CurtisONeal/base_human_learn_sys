@@ -143,6 +143,21 @@ def test_dedupe_keeps_copy_further_from_edge():
     assert [s.text for s in n] == ["B full", "later"]
 
 
+def test_dedupe_both_clipped_prefers_next_window():
+    # Real E3 seam at 1500 s (windows 0-1508 / 1500-...): both copies touch
+    # an edge. Keeping prev's duplicated "you need to issue session limits".
+    prev = [Segment(start=1497.84, end=1499.52, text="That's not what we want."),
+            Segment(start=1499.52, end=1508.0,
+                    text="So this scenario ... in QA, and you need to issue session limits.")]
+    nxt = [Segment(start=1500.0, end=1505.6, text="So this scenario ... in QA."),
+           Segment(start=1505.6, end=1512.24, text="And you need to issue session limits and ...")]
+    p, n = longasr.dedupe_overlap(prev, 1508.0, nxt, 1500.0)
+    joined = " ".join(s.text for s in p + n)
+    assert joined.count("issue session limits") == 1
+    assert joined.count("So this scenario") == 1
+    assert [s.text for s in p] == ["That's not what we want."]
+
+
 def test_dedupe_never_drops_unmatched_speech():
     prev = [Segment(start=21, end=22, text="only in prev")]
     nxt = [Segment(start=22.5, end=23.5, text="only in next")]

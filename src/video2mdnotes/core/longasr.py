@@ -58,6 +58,8 @@ SILENCE_MIN_S = 2.0
 # Two segments from neighbouring windows are the same speech when they overlap
 # in time by at least this fraction of the shorter one.
 DUPLICATE_OVERLAP_FRACTION = 0.5
+# A segment within this of a window edge counts as cut by that edge.
+EDGE_EPS_S = 0.05
 # Parts of one camera recording: next part's creation_time within this many
 # seconds of previous creation_time + duration.
 GROUP_TOLERANCE_S = 10.0
@@ -332,12 +334,26 @@ def dedupe_overlap(prev: List[Segment], prev_ext_end: float,
                 shorter == 0 and abs(a.start - b.start) < 0.5)
             if not same:
                 continue
-            dist_a = prev_ext_end - a.end
-            dist_b = b.start - nxt_ext_start
-            if dist_a >= dist_b:
-                drop_n.add(j)
+            # A segment touching its window edge was cut by it. Measured on
+            # the E3 meetup at 1500 s: prev's last sentence ran to the edge
+            # (1499.5-1508.0, clipped) and swallowed words that next's NEXT
+            # segment also holds; next's copy started exactly at its edge
+            # too. Both distances were 0 and keeping prev duplicated a phrase.
+            # So: a clipped copy loses to an unclipped one, and when both are
+            # clipped prev's loses — the next window re-heard its tail with
+            # context, and the stretch it alone covers is < its look-behind.
+            clipped_a = a.end >= prev_ext_end - EDGE_EPS_S
+            clipped_b = b.start <= nxt_ext_start + EDGE_EPS_S
+            if clipped_a != clipped_b:
+                drop_prev = clipped_a
+            elif clipped_a:
+                drop_prev = True
             else:
+                drop_prev = (prev_ext_end - a.end) < (b.start - nxt_ext_start)
+            if drop_prev:
                 drop_p.add(i)
+            else:
+                drop_n.add(j)
     return ([s for i, s in enumerate(prev) if i not in drop_p],
             [s for j, s in enumerate(nxt) if j not in drop_n])
 
@@ -557,7 +573,10 @@ def transcribe_long(
         "windows_run": ran,
         "windows_skipped": skipped,
         "model_load_s": load_s,
-        "wall_s": wall,
+        "wall_s": wall,  # this invocation only; resumed windows cost ~0
+        # Summed from checkpoints, so it survives resumes.
+        "asr_extract_s": round(sum(r[2]["timings"]["extract_s"] for r in records), 1),
+        "asr_transcribe_s": round(sum(r[2]["timings"]["transcribe_s"] for r in records), 1),
         "segments": len(segments),
         "words": sum(len(s.text.split()) for s in segments),
         "gate": gate,
