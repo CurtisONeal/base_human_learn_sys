@@ -133,11 +133,11 @@ the hard stop.
 | WP-1 | **done** — merged | 11775c3 | 15 new tests; 320 pass. Note for WP-6b: `media` still calls whole-file `to_wav()` — must become windowed |
 | WP-6a | in progress (agent, worktree) | | started 2026-10-15 ~22:00 ET |
 | WP-2 | **done** — merged | e114cb2 | CCA-F: rung=description, 13 ch + preamble, 3 chapters split in 2 (≤12k words), full coverage. WP-3: use path[0] for chapter name; feed groups, not chunk_sections (it would re-merge parts) |
-| WP-4 | in progress (agent, worktree) | | wave 2, started ~22:40 ET |
+| WP-4 | **done** — merged | 51e31f6 | CCA-F: 89→0 evaluator mishearings, 104 corrections logged, raw byte-identical. Bare "cloud"(=Claude, ~30) left alone deliberately → WP-3 prompt carries a mishearing hint |
 | WP-8 | **done** — merged | 9358c31 | 339 pass. Open: VLM step bypasses ledger (frames off by default); Nous prices unverified; hermes proxy default 127.0.0.1:8645 |
-| WP-3 | pending | | |
+| WP-3 | in progress (agent, worktree) | | absorbs WP-7 (prompts/course map) to avoid two agents editing the same prompt path |
 | WP-5 | **done** — merged | 3f668e5 | notes_format.py; WP-3 MUST call validate_time_sensitive (fill) before stamp_notes or P5 fails |
-| WP-7 | pending | | |
+| WP-7 | folded into WP-3 | | |
 | WP-6b | pending | | |
 | E1 | pending | | |
 | E2 | pending | | |
