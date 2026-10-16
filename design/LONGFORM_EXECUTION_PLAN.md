@@ -140,8 +140,8 @@ the hard stop.
 | WP-7 | folded into WP-3 | | |
 | WP-6b | **done** — merged | 1c9ce1f, 0ea99a1 | E3 ASR: 4 parts auto-grouped, parakeet 8 windows, 223 s wall, 17,507 words, gate PASS (coverage 100 %, span 99.96 %, max gap 48 s); seam-duplicate bug found+fixed; resume verified (re-stitch 1.9 s) |
 | E1 | **PASS** (E1b: P1–P7 + P8 20/20) | | see eval log; WP-F4 polish before E2 |
-| E2 | running | | full 13 ch, concurrency 3, claude-cli only → previous_run_results/E2_cca_f_full |
-| E3 | pending | | |
+| E2 | P1–P7 PASS; P8 under review | | 9 min, 17 passages, 38,978 words |
+| E3 | ASR done (WP-6b); notes run in progress | | |
 
 ## Eval log
 
@@ -177,3 +177,13 @@ _(append each run: date, eval, P1–P8 results, cost, decision)_
 - Remaining (not P8-failing): (1) audit retarget false positive 8:23:35→8:30:19 on generic words; (2) leftover `[t n/a]` markers; (3) header "of 14" vs chapters_total 13; (4) npx/cowsay outcome still misread — model interpretation of an ambiguous demo; recorded as a known limit, not code-fixable reliably; (5) an exam point drawn from Claude's generated test plan rather than an observation.
 - WP-F4 (audit precision + markers + header + wording) started before E2.
 - WP-F4 merged (62e423a, 569 pass): retarget needs justifying term & cited ±5 s lacks one; E1 keeps 2 correct retargets; E1b false retarget gone; n/a markers normalized; header excludes preamble.
+
+### 2026-10-15 23:24–23:33 ET · E2 full CCA-F (12.6 h)
+- 17 passage calls (all claude-cli/opus, first try, no timeouts) + course map; 9 min wall at concurrency 3; $0 metered. Notes 38,978 words.
+- P1 PASS 13/13 · P2 PASS 2521/2521 · P3 PASS 99.996 % · P4 PASS · P5 PASS 124/124 · P6 PASS 0 · P7 PASS 104/104.
+- P8: independent reviewer running (seed 2, 20 of 1121) + split-chapter/course-map/outcome/missing-content checks.
+
+### E3 prep
+- Meetup date: no September 2026 CLE-AI event in calendar or vault; not guessed. Camera clock reads 2024-01-01 (reset default) — fix 4527d77: Jan 1 device dates no longer become `as_of` (falls back to captured, labelled).
+- E3 structure: no chapters → rung `cues` (5 inferred sections, generic titles). P1 for E3 graded against the pipeline's own inferred sections (consistency only — approved E3 rule: rung recorded).
+- E3 long-form run started 23:4x ET.
