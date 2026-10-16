@@ -179,7 +179,8 @@ def test_batched_map_makes_one_themes_call_over_candidates_only(small_run, tmp_p
     assert "### Candidate themes" in batch_system
     notes = result.summary_path.read_text()
     block = notes.split("### Cross-chapter themes", 1)[1].split("\n## ", 1)[0]
-    assert "- Agent SDK compared with the Anthropic SDK (ch. 1, 2, 3)" in block
+    # Tagged on 3 of 3 chapters -> shown as "(all chapters)" (WP-F9 (m)).
+    assert "- Agent SDK compared with the Anthropic SDK (all chapters)" in block
     assert block.count("Anthropic SDK") == 1
     assert result.course_map_calls == 4
 

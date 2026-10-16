@@ -1010,15 +1010,19 @@ def _map_collapsed(text: str, batch: List[List[Passage]], gists: Dict[str, str])
 # the candidate bullets and chapter titles only — never the chapter notes)
 # consolidates them into <= MAX_THEMES, with a deterministic merge as fallback.
 
-_THEME_CH = re.compile(r"\s*\((?:ch(?:apters?|s)?\.?|§)\s*([^)]*)\)\s*\.?\s*$", re.I)
+_THEME_CH = re.compile(
+    r"\s*\((?P<pre>preamble\s*[,;]\s*)?(?:ch(?:apters?|s)?\.?|§)\s*([^)]*)\)\s*\.?\s*$", re.I)
 
 
 def split_theme(theme: str) -> Tuple[str, List[str]]:
-    """("Theme text", ["2", "5"]) from "Theme text (ch. 2, 5)"."""
+    """("Theme text", ["2", "5"]) from "Theme text (ch. 2, 5)"; the preamble
+    ("(preamble, ch. 1, 2)", as the model writes it) is label "-"."""
     m = _THEME_CH.search(theme or "")
     if not m:
         return (theme or "").strip(), []
-    chs = [c for c in re.split(r"[,;&\s]+|\band\b", m.group(1)) if c.strip()]
+    chs = [c for c in re.split(r"[,;&\s]+|\band\b", m.group(2)) if c.strip()]
+    if m.group("pre"):
+        chs = ["-"] + chs
     return theme[: m.start()].strip(), chs
 
 
@@ -1027,8 +1031,11 @@ def _ch_key(c: str):
 
 
 def render_theme(text: str, chapters: Sequence[str]) -> str:
-    chs = sorted(set(chapters), key=_ch_key)
-    return f"{text} (ch. {', '.join(chs)})" if chs else text
+    chs = sorted(set(chapters) - {"-"}, key=_ch_key)
+    pre = "preamble, " if "-" in chapters else ""
+    if not chs:
+        return f"{text} (preamble)" if pre else text
+    return f"{text} ({pre}ch. {', '.join(chs)})"
 
 
 def merge_themes(candidates: Sequence[str], limit: int = MAX_THEMES,
@@ -1157,12 +1164,28 @@ def generic_topic_words(chapter_texts: Dict[str, str], max_df: float = GENERIC_T
     return {t for t, k in df.items() if k / n > max_df}
 
 
-def chapter_topic_lists(plan: Plan, notes_by_key: Dict[str, str]
+def chapter_topic_lists(plan: Plan, notes_by_key: Dict[str, str], full: bool = False
                         ) -> Tuple[Dict[str, List[str]], List[str]]:
-    """({chapter label: key topics}, one-word topics dropped as generic). The
-    same lists go to the themes call and to the tagging post-check."""
-    raw = {_chapter_label(ch): chapter_topics(ch, notes_by_key, limit=3 * MAX_TOPICS)
+    """({chapter label: key topics}, one-word topics dropped as generic).
+
+    full=False: at most MAX_TOPICS per chapter — what the themes call sees.
+    full=True: EVERY Key Concepts term and sub-heading plus the chapter title
+    — what the tagging post-check matches against. (E2c: ch. 7 teaches plan
+    mode, but "plan mode" was its 11th term, cut from the 8-topic list, so
+    the plan-mode theme never got ch. 7 — F9 (m).)"""
+    limit = 10 ** 6 if full else 3 * MAX_TOPICS
+    raw = {_chapter_label(ch): chapter_topics(ch, notes_by_key, limit=limit)
            for ch in plan.selected}
+    if full:
+        for ch in plan.selected:
+            # The title, and its distinctive words ("permissions", "safety"):
+            # a theme naming one of them is about this chapter too.
+            title = _clean_topic(ch[0].title)
+            if title:
+                raw[_chapter_label(ch)].append(title)
+                raw[_chapter_label(ch)] += [
+                    w for w in re.findall(r"[A-Za-z][A-Za-z-]{4,}", title)
+                    if w.lower() not in citations.STOPWORDS]
     generic = generic_topic_words({
         _chapter_label(ch): "\n".join(chapter_body(notes_by_key[p.key], 3) for p in ch)
         for ch in plan.selected})
@@ -1177,7 +1200,7 @@ def chapter_topic_lists(plan: Plan, notes_by_key: Dict[str, str]
                     dropped.append(t)
                 continue
             keep.append(t)
-        topics[label] = keep[:MAX_TOPICS]
+        topics[label] = keep if full else keep[:MAX_TOPICS]
     return topics, dropped
 
 
@@ -1206,6 +1229,28 @@ def tag_theme_chapters(themes: Sequence[str], topics: Dict[str, List[str]],
                     break
         out.append(render_theme(text, have) if have != list(chs) else theme)
     return out, log
+
+
+ALL_CHAPTERS_FRACTION = 0.9
+
+
+def mark_all_chapter_themes(themes: Sequence[str], labels: Sequence[str],
+                            fraction: float = ALL_CHAPTERS_FRACTION
+                            ) -> Tuple[List[str], List[str]]:
+    """A theme tagged on >= `fraction` of the chapters keeps its text but its
+    tag list becomes "(all chapters)": a list of every chapter number tells a
+    skimmer nothing. Returns (themes, texts so marked)."""
+    real = [lb for lb in labels if lb != "-"]
+    out, marked = [], []
+    for theme in themes:
+        text, chs = split_theme(theme)
+        hit = {c for c in chs if c in real}
+        if real and len(real) >= 3 and len(hit) >= fraction * len(real):
+            out.append(f"{text} (all chapters)")
+            marked.append(text)
+        else:
+            out.append(theme)
+    return out, marked
 
 
 def _themes_input(plan: Plan, candidates: Sequence[str],
@@ -1314,11 +1359,15 @@ def build_course_map(plan: Plan, notes_by_key: Dict[str, str], state: State,
     topics, generic_dropped = chapter_topic_lists(plan, notes_by_key)
     themes, theme_model, theme_calls, theme_fallback = consolidate_themes(
         plan, candidates, state, complete, resume=resume, progress=progress, topics=topics)
-    themes, tags_added = tag_theme_chapters(themes, topics)
+    tag_terms, _ = chapter_topic_lists(plan, notes_by_key, full=True)
+    themes, tags_added = tag_theme_chapters(themes, tag_terms)
+    themes, all_chapter_themes = mark_all_chapter_themes(
+        themes, [_chapter_label(ch) for ch in plan.selected])
     with state.lock:
         state.data["course_map"]["theme_tags"] = {
             "topics": topics, "added": tags_added,
-            "generic_one_word_topics_dropped": generic_dropped}
+            "generic_one_word_topics_dropped": generic_dropped,
+            "all_chapters": all_chapter_themes}
         state.save()
     calls += theme_calls
     if theme_model:
