@@ -4,11 +4,14 @@ import re
 import shutil
 import subprocess
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from pydantic import BaseModel
 import litellm
 
 from video2mdnotes.config import settings
+from video2mdnotes.core import costs
+from video2mdnotes.core.costs import BudgetExhausted  # noqa: F401 - re-exported
 from video2mdnotes.core.transcriber import TranscriptResult
 
 
@@ -164,8 +167,15 @@ def _complete_claude_cli(model: str, system_prompt_file: Path, user_message: str
     return content
 
 
-def _complete(model: str, api_key: str | None, system_prompt: str, user_message: str) -> str:
+def _complete(model: str, api_key: str | None, system_prompt: str, user_message: str,
+              **extra) -> str:
     """Single litellm call; raises on empty output so the caller can fall back."""
+    return _complete_response(model, api_key, system_prompt, user_message, **extra)[0]
+
+
+def _complete_response(model: str, api_key: str | None, system_prompt: str,
+                       user_message: str, **extra) -> tuple[str, object]:
+    """litellm call returning (content, raw response) — the response carries usage."""
     response = litellm.completion(
         model=model,
         api_key=api_key,
@@ -174,11 +184,102 @@ def _complete(model: str, api_key: str | None, system_prompt: str, user_message:
             {"role": "user", "content": user_message},
         ],
         timeout=300,  # 5 minutes
+        **{k: v for k, v in extra.items() if v is not None},
     )
     content = response.choices[0].message.content
     if not content:
         raise ValueError("LLM returned an empty summary.")
+    return content, response
+
+
+# OpenAI-compatible providers addressed by their own prefix. litellm has no
+# native "nous"/"hermes" provider, so these are rewritten to its generic
+# openai/ adapter with an explicit api_base — the idea from the June
+# LLM_API_BASE branch (4406b6d), but per entry, so OpenAI proper and Nous can
+# both sit in one chain with separate keys and separate caps. A single global
+# api_base (as that branch had) would also have redirected openai/gpt-4o.
+OPENAI_COMPATIBLE_PROVIDERS = frozenset({"nous", "hermes"})
+
+# Any bearer works: the Hermes proxy discards it and attaches the real OAuth
+# credential. Non-empty because the openai client refuses an empty key.
+HERMES_PROXY_DUMMY_KEY = "hermes-proxy"
+
+
+@dataclass(frozen=True)
+class Route:
+    """How one chain entry is called and how it is accounted for."""
+    entry: str                 # as written in LLM_MODELS
+    kind: str                  # costs.SUBSCRIPTION | costs.METERED | costs.LOCAL
+    ledger_provider: str       # name used in the ledger and PROVIDER_USD_CAPS
+    litellm_model: str | None  # model string handed to litellm (None for CLI)
+    api_base: str | None = None
+    api_key: str | None = None
+
+
+def resolve_route(entry: str) -> Route:
+    """Map an LLM_MODELS entry to its backend, endpoint, key and ledger name."""
+    provider = _provider_of(entry)
+    if entry.startswith(CLAUDE_CLI_PREFIX):
+        return Route(entry, costs.SUBSCRIPTION, "claude-cli", None)
+    if provider in LOCAL_PROVIDERS:
+        return Route(entry, costs.LOCAL, provider, entry)
+    if provider in OPENAI_COMPATIBLE_PROVIDERS:
+        name = entry.split("/", 1)[1].strip()
+        if provider == "nous":
+            return Route(entry, costs.METERED, "nous", f"openai/{name}",
+                         api_base=settings.nous_api_base,
+                         api_key=real_key(settings.nous_api_key))
+        return Route(entry, costs.METERED,
+                     (settings.hermes_proxy_provider or "hermes").strip().lower(),
+                     f"openai/{name}", api_base=settings.hermes_proxy_base,
+                     api_key=HERMES_PROXY_DUMMY_KEY)
+    return Route(entry, costs.METERED, provider or "unknown", entry,
+                 api_key=_api_key_for(entry))
+
+
+def _complete_metered(route: Route, system_prompt: str, user_message: str) -> str:
+    """Cap-checked metered call: estimate, refuse if over a cap, call, record.
+
+    Raises BudgetExhausted BEFORE any network call when the worst case
+    (prompt tokens + the full output allowance) would exceed a cap.
+    """
+    ledger = costs.get_ledger()
+    max_out = settings.metered_max_output_tokens
+    prompt_tokens = costs.estimate_prompt_tokens(
+        system_prompt + "\n" + user_message, route.litellm_model
+    )
+    estimate = costs.price_tokens(route.entry, prompt_tokens, max_out, route.litellm_model)
+    ledger.check(route.ledger_provider, estimate,
+                 settings.metered_usd_cap, settings.provider_usd_caps)
+
+    content, response = _complete_response(
+        route.litellm_model, route.api_key, system_prompt, user_message,
+        api_base=route.api_base, max_tokens=max_out,
+    )
+    tin, tout, usd, estimated = costs.usage_and_cost(
+        response, route.entry, route.litellm_model, fallback_usd=estimate
+    )
+    try:
+        ledger.record(provider=route.ledger_provider, model=route.entry,
+                      kind=costs.METERED, input_tokens=tin, output_tokens=tout,
+                      usd=usd, estimated=estimated)
+    except Exception as exc:  # noqa: BLE001 - the call is paid for; keep its output
+        print(f"Summarizer: WARNING — could not record ${usd:.4f} for {route.entry} "
+              f"in the cost ledger ({exc}). Spend caps are now under-counting.")
     return content
+
+
+def _record_unmetered(route: Route, system_prompt: str, user_message: str,
+                      output: str) -> None:
+    """Count a subscription/local call in the ledger at $0 (never blocks)."""
+    try:
+        costs.get_ledger().record(
+            provider=route.ledger_provider, model=route.entry, kind=route.kind,
+            input_tokens=(len(system_prompt) + len(user_message)) // 4,
+            output_tokens=len(output) // 4, usd=0.0, estimated=True,
+        )
+    except Exception as exc:  # noqa: BLE001 - accounting must not fail a free call
+        print(f"Summarizer: could not record {route.entry} in the cost ledger ({exc}).")
 
 
 EMPTY_TRANSCRIPT_PLACEHOLDER = (
@@ -242,30 +343,46 @@ def complete_with_failover(system_prompt: str, user_message: str) -> tuple[str, 
     escalation policy — and the policy here is the one that keeps an unattended
     overnight run from quietly starting to spend money.
 
+    Every metered entry is cap-checked against the cost ledger before it is
+    called (core/costs.py). A capped entry is skipped like a failed one, so the
+    chain moves on (e.g. openai -> nous).
+
     Raises:
-        SubscriptionExhausted: re-raised so the caller can wait and retry.
+        SubscriptionExhausted: re-raised so the caller can wait and retry —
+            also when metered fallback was allowed but every paid entry was
+            capped or failed.
+        BudgetExhausted: no entry succeeded and at least one was refused by a
+            spend cap. Callers stop the run cleanly (finished work is kept).
         RuntimeError: every configured provider failed.
     """
     errors: list[str] = []
     exhausted = False
     exhaustion: SubscriptionExhausted | None = None
+    budget_blocks: list[BudgetExhausted] = []
     policy = (settings.on_exhaustion or "wait").strip().lower()
+    # ALLOW_METERED_FALLBACK widens a non-"local" policy to the metered
+    # entries; it never overrides an explicit "local" (no paid backdoor there).
+    metered_after_exhaustion = policy == "metered" or (
+        settings.allow_metered_fallback and policy != "local"
+    )
 
     for model in settings.llm_models:
+        route = resolve_route(model)
         provider = _provider_of(model) or "unknown"
 
         # Once the subscription is exhausted, what may still run depends on
         # policy. The default deliberately refuses to reach a paid backend:
         # an unattended run must not start spending because nobody was there
         # to answer. main.py turns the raised exception into a wait or a stop.
-        if exhausted and policy not in ("metered", "local"):
+        if exhausted and policy == "local":
+            if provider not in LOCAL_PROVIDERS:
+                errors.append(f"{model}: skipped (on-exhaustion=local allows local backends only)")
+                continue
+        elif exhausted and not metered_after_exhaustion:
             break
-        if exhausted and policy == "local" and provider not in LOCAL_PROVIDERS:
-            errors.append(f"{model}: skipped (on-exhaustion=local allows local backends only)")
-            continue
 
         try:
-            if model.startswith(CLAUDE_CLI_PREFIX):
+            if route.kind == costs.SUBSCRIPTION:
                 # Subscription CLI: authenticates from the keychain, no API key.
                 # The CLI takes a system prompt as a *file*, so the caller's
                 # prompt is written to one. Passing settings.prompt_file
@@ -282,7 +399,8 @@ def complete_with_failover(system_prompt: str, user_message: str) -> tuple[str, 
                     llm_output = _complete_claude_cli(model, prompt_path, user_message)
                 finally:
                     prompt_path.unlink(missing_ok=True)
-            elif provider in LOCAL_PROVIDERS:
+                _record_unmetered(route, system_prompt, user_message, llm_output)
+            elif route.kind == costs.LOCAL:
                 # Local models need no key, so nothing except this gate stops a
                 # chain from silently falling through to a much weaker model.
                 if not settings.allow_local_models:
@@ -292,18 +410,27 @@ def complete_with_failover(system_prompt: str, user_message: str) -> tuple[str, 
                     )
                     continue
                 llm_output = _complete(model, None, system_prompt, user_message)
+                _record_unmetered(route, system_prompt, user_message, llm_output)
             else:
-                api_key = _api_key_for(model)
-                if not (api_key or "").strip():
+                if not (route.api_key or "").strip():
                     errors.append(f"{model}: no API key configured")
                     continue
-                llm_output = _complete(model, api_key, system_prompt, user_message)
+                llm_output = _complete_metered(route, system_prompt, user_message)
         except SubscriptionExhausted as e:
             exhausted = True
             exhaustion = e
             errors.append(f"{model}: {e}")
-            print(f"Summarizer: {model} exhausted; not escalating to a paid backend "
-                  f"unless --on-exhaustion says to.")
+            if metered_after_exhaustion:
+                print(f"Summarizer: {model} exhausted; continuing on metered backends "
+                      f"(capped at ${settings.metered_usd_cap:.2f}).")
+            else:
+                print(f"Summarizer: {model} exhausted; not escalating to a paid backend "
+                      f"unless --on-exhaustion or ALLOW_METERED_FALLBACK says to.")
+            continue
+        except BudgetExhausted as e:
+            budget_blocks.append(e)
+            errors.append(f"{model}: {e}")
+            print(f"Summarizer: {model} refused by spend cap ({e}); trying next provider if any.")
             continue
         except Exception as e:  # noqa: BLE001 - record and try the next provider
             errors.append(f"{model}: {e}")
@@ -314,8 +441,21 @@ def complete_with_failover(system_prompt: str, user_message: str) -> tuple[str, 
 
     # Exhaustion is re-raised as itself so the caller can wait for the limit to
     # reset and retry this same video, rather than treating it as a dead run.
+    # This holds even when the paid entries were also capped: waiting for
+    # capacity already paid for is the plan's answer to "everything is spent".
     if exhausted:
         raise exhaustion
+
+    if budget_blocks:
+        last = budget_blocks[-1]
+        raise BudgetExhausted(
+            "Stopping: every metered provider that could take this call is at its "
+            "spend cap, and no other provider succeeded. Raise METERED_USD_CAP / "
+            "PROVIDER_USD_CAPS or point COST_LEDGER_PATH at a new ledger to "
+            "continue. Details: " + "; ".join(errors),
+            provider=last.provider, spent=last.spent, cap=last.cap,
+            estimate=last.estimate,
+        )
 
     raise RuntimeError(
         "Summary generation failed for all configured providers: " + "; ".join(errors)
@@ -534,7 +674,7 @@ def summarize_document(source, max_words: int = None, progress=None) -> SummaryR
                 f"{sum(len(n.split()) for n in passage_notes)} words of passage "
                 f"notes — it chatted or truncated instead of assembling"
             )
-    except SubscriptionExhausted:
+    except (SubscriptionExhausted, BudgetExhausted):
         raise
     except Exception as exc:  # noqa: BLE001 - keep the work that succeeded
         final = _fallback(str(exc)[:200])
