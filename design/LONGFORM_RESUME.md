@@ -9,7 +9,11 @@
 - ADR-045 appended to `agent_set_up/ADR_INSTALL_LOG.md` — **NOT committed** (agent_set_up has the
   user's own uncommitted edits: HUMANS.md, KEYBOARD_SETUP_TASKS.md deletion, bin/). Leave for the user.
 
-## In flight
+## Status 15:30 ET
+- WP-M1 task 0 (per-run cap) merged (fbdd3f4, 707 pass); `.env` has METERED_USD_CAP. Overtime Discord notice sent 15:2x.
+- Tasks 1+3 NOT started: **waiting for the user to choose real test files** (asked in terminal). Do not generate fixtures or restart the agent until they answer.
+
+## In flight (superseded — see Status)
 - **WP-M1** agent (branch `worktree-agent-ace1b24c4d43ce4f4`): (0) per-run cost cap `RUN_USD_CAP`
   + `--usd-cap` flag on process/media/book/longform + API `usd_cap`; (1) caller audit + 
   `tests/test_integration_mvp.py` driving every entry point (book EPUB/PDF, process md/txt/html,
