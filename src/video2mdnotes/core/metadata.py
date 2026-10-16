@@ -23,6 +23,7 @@ before the end of the video.
 """
 
 import datetime as dt
+import json
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
@@ -69,7 +70,15 @@ class SourceMeta(BaseModel):
         run_dir = Path(run_dir)
         run_dir.mkdir(parents=True, exist_ok=True)
         path = run_dir / META_FILENAME
-        path.write_text(self.model_dump_json(indent=2), encoding="utf-8")
+        data = json.loads(self.model_dump_json())
+        # yt-dlp-style aliases read by the long-form evaluator
+        # (eval/longform.py: `duration`, chapters[].start_time). Without
+        # `duration` the evaluator found no duration and P3 failed on every
+        # run the pipeline wrote. Ignored on read (pydantic drops extras).
+        data["duration"] = self.duration_s
+        for chapter in data.get("chapters", []):
+            chapter["start_time"] = chapter.get("start_s")
+        path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
         return path
 
     @classmethod

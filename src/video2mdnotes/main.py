@@ -200,6 +200,90 @@ def _wait_for_reset(exhausted: SubscriptionExhausted) -> None:
     time.sleep(seconds)
 
 
+def _longform_waiting(run_dir: Path, **kwargs):
+    """Run the long-form path, waiting across a limit reset when policy is "wait".
+
+    Each retry resumes from the passage checkpoints, so a wait costs nothing
+    already done. BudgetExhausted and other failures propagate to the caller.
+    """
+    from video2mdnotes.core import longform
+
+    kwargs.setdefault("progress", lambda msg: console.print(f"      [dim]{msg}[/dim]"))
+    while True:
+        try:
+            return longform.run_longform(run_dir, **kwargs)
+        except SubscriptionExhausted as exc:
+            if _resolve_exhaustion_policy() != "wait":
+                raise
+            _wait_for_reset(exc)
+
+
+def _summarize_transcript(transcript, project_dir: Path):
+    """The length gate. Short transcripts: today's single call, unchanged.
+    Long ones (> DEFAULT_MAX_WORDS): the checkpointed long-form path, which
+    writes summaries/<name>.summary.md itself. Returns a SummaryResult."""
+    from video2mdnotes.core import longform
+    from video2mdnotes.core.summarizer import SummaryResult
+
+    if not longform.needs_longform(transcript.segments):
+        return generate_summary(transcript)
+    words = longform.word_count(transcript.segments)
+    console.print(f"      [bold]Long transcript ({words:,} words):[/bold] long-form path")
+    result = _longform_waiting(project_dir)
+    return SummaryResult(
+        source_file=transcript.source_file,
+        model_name=", ".join(result.models) or "none",
+        summary_text=result.notes,
+        generated_at=dt.datetime.now(),
+    )
+
+
+@app.command()
+def longform(
+    run_dir: Path = typer.Argument(..., help="Existing run dir: transcripts/*.md + yt_info.json or source_meta.json"),
+    only: str = typer.Option(None, "--only", help="Comma list of chapter numbers or title substrings (pilot subsets)"),
+    plan_only: bool = typer.Option(False, "--plan-only", help="Print sections, parts, passages and estimated calls; no model calls"),
+    resume: bool = typer.Option(True, "--resume/--no-resume", help="Skip passages already checkpointed (default on)"),
+    concurrency: int = typer.Option(1, "--concurrency", help="Chapters summarized in parallel (parts of one chapter stay sequential)"),
+    out: Path = typer.Option(None, "--out", help="Output dir (default: the run dir)"),
+    on_exhaustion: str = typer.Option(None, "--on-exhaustion"),
+):
+    """Long-form notes for an EXISTING run dir — no download, no transcription.
+
+        longform previous_run_results/<run> --plan-only
+        longform previous_run_results/<run> --only "1,MCP Ecosystem" --out /tmp/pilot
+    """
+    from video2mdnotes.core import longform as lf
+
+    if on_exhaustion:
+        settings.on_exhaustion = on_exhaustion.strip().lower()
+    run_dir = Path(run_dir).expanduser()
+    out_dir = Path(out).expanduser() if out else run_dir
+    try:
+        if plan_only:
+            plan = lf.build_plan(run_dir, out_dir, only=only, write=False)
+            state = lf.State(out_dir) if (out_dir / lf.STATE_FILENAME).exists() and resume else None
+            console.print(lf.describe_plan(plan, state), highlight=False, markup=False)
+            return
+        result = _longform_waiting(run_dir, out_dir=out_dir, only=only, resume=resume,
+                                   concurrency=max(1, concurrency))
+    except (FileNotFoundError, ValueError) as exc:
+        console.print(f"[red]{type(exc).__name__}:[/red] {exc}")
+        raise typer.Exit(2)
+    except SubscriptionExhausted as exc:
+        console.print(f"[yellow]Stopped (subscription exhausted):[/yellow] {exc}\n"
+                      "Completed passages are checkpointed; re-run to resume.")
+        raise typer.Exit(1)
+    except BudgetExhausted as exc:
+        console.print(f"[yellow]Stopped (spend cap):[/yellow] {exc}\n"
+                      "Completed passages are checkpointed; re-run to resume.")
+        raise typer.Exit(1)
+    except lf.LongformIncomplete as exc:
+        console.print(f"[red]Incomplete:[/red] {exc}")
+        raise typer.Exit(1)
+    console.print(f"[green]Notes:[/green] {result.summary_path}")
+
+
 @app.command()
 def media(
     path: str = typer.Argument(..., help="Audio/video file, or a directory of them"),
@@ -300,12 +384,12 @@ def media(
         console.print(f"      [green]Transcript:[/green] {transcript_path}")
 
         try:
-            result = generate_summary(transcript)
+            result = _summarize_transcript(transcript, project_dir)
         except SubscriptionExhausted as exc:
             if _resolve_exhaustion_policy() == "wait":
                 _wait_for_reset(exc)
                 try:
-                    result = generate_summary(transcript)
+                    result = _summarize_transcript(transcript, project_dir)
                 except Exception as retry_exc:  # noqa: BLE001
                     console.print(f"      [red]Failed after wait:[/red] {retry_exc}")
                     failed += 1
@@ -912,7 +996,7 @@ def process(
             logger.info("Step 3: Generating Summary...")
             while True:
                 try:
-                    summary_result = generate_summary(transcript_result)
+                    summary_result = _summarize_transcript(transcript_result, project_dir)
                     break
                 except SubscriptionExhausted as e:
                     if _resolve_exhaustion_policy() != "wait":
@@ -1052,7 +1136,7 @@ def process(
 # `python -m video2mdnotes.main <url>` with no verb. Rather than change a
 # published interface as a side effect of adding a feature, an unrecognised
 # first argument is treated as a URL for `process`, exactly as before.
-_COMMANDS = {"process", "book", "catalog", "media"}
+_COMMANDS = {"process", "book", "catalog", "media", "longform"}
 
 
 def _with_default_command(argv: list[str]) -> list[str]:
