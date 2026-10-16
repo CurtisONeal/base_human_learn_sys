@@ -138,7 +138,7 @@ the hard stop.
 | WP-3 | **done** — merged | 6d30f98, 3328d01 | 492 pass. plan-only CCA-F = 17 passages + 3 map calls. Real smoke (MCP chapter, claude-cli/opus): P1–P7 PASS. Gaps: 12k-word passage vs 900 s CLI timeout untested; real ledger hand-off untested (E1 covers) |
 | WP-5 | **done** — merged | 3f668e5 | notes_format.py; WP-3 MUST call validate_time_sensitive (fill) before stamp_notes or P5 fails |
 | WP-7 | folded into WP-3 | | |
-| WP-6b | in progress (agent, worktree) | | parakeet primary; ends with E3 transcription of the 4-part meetup (no LLM) |
+| WP-6b | **done** — merged | 1c9ce1f, 0ea99a1 | E3 ASR: 4 parts auto-grouped, parakeet 8 windows, 223 s wall, 17,507 words, gate PASS (coverage 100 %, span 99.96 %, max gap 48 s); seam-duplicate bug found+fixed; resume verified (re-stitch 1.9 s) |
 | E1 | P1–P7 PASS; **P8 FAIL** → fixes F1–F3 merged (85c026d); **E1b rerun running** | | see eval log |
 | E2 | pending | | |
 | E3 | pending | | |
