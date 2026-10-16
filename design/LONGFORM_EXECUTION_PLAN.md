@@ -140,8 +140,8 @@ the hard stop.
 | WP-7 | folded into WP-3 | | |
 | WP-6b | **done** — merged | 1c9ce1f, 0ea99a1 | E3 ASR: 4 parts auto-grouped, parakeet 8 windows, 223 s wall, 17,507 words, gate PASS (coverage 100 %, span 99.96 %, max gap 48 s); seam-duplicate bug found+fixed; resume verified (re-stitch 1.9 s) |
 | E1 | **PASS** (E1b: P1–P7 + P8 20/20) | | see eval log; WP-F4 polish before E2 |
-| E2 | **PASS** (P1–P7 + P8 16/0 partial 1/0 unsupported) | | 9 min, 17 passages, 38,978 words; polish WP-F7 |
-| E3 | P3 FAIL (coarse ASR segment) → WP-F5/F6 running | | |
+| E2 | **PASS** (E2 and E2b, P1–P8) | | 9 min, 17 passages, ~39k words |
+| E3 | **PASS** (E3b, P1–P8 20/20) | | after F5 (segment cap) + F6 (outline rung) |
 
 ## Eval log
 
@@ -209,3 +209,7 @@ _(append each run: date, eval, P1–P8 results, cost, decision)_
 - E3b (re-segmented ASR + outline rung, 10 talk-aligned titled sections): P1 PASS 10/10 (vs pipeline outline — consistency) · P2 PASS 930/930 · P3 PASS · P4 PASS (published unknown, as_of captured) · P5 PASS 63/63 · P6 PASS · P7 PASS. (First grading P1 "FAIL" = managing agent read the wrong JSON key for the expected list; regraded.)
 - E2b (with F7 polish): P1 PASS 13/13 · P2 PASS 2531/2531 · P3 PASS · P4 PASS · P5 PASS 131/131 · P6 PASS · P7 PASS 104/104. recorded_estimate 2026-04 present; 0 leaked repair strings.
 - P8 independent reviews running for both.
+- **E3b P8 PASS 20/20** (0 partial). Sections ±30 s of real talk changes. Reviewer: "genuinely useful as a record of the meetup". Defects: cross-section contradiction (giveaway), ASR-only names unhedged / host misattributed, 95 % vs 80 % attribution, spoken event-date anchor unused, 1 wrong citation.
+- **E2b P8 PASS** (17 S / 1 P / 0 U / 2 N/A). Reviewer: better than E2; all F7 fixes hold. Defects: over-eager arithmetic correction, 2 false "unverified citation" markers (caption mishearings), plan-mode outcome stated as observed, theme tagging incomplete.
+- **All three evaluations pass the approved bar (P1–P8): E1b, E2/E2b, E3b.**
+- WP-F8 (final improvements: cross-section consistency call, quantity attribution, ASR name hedging, relative-date event estimate, fuzzy audit, Check: rule, theme tagging) started 2026-10-16 ~00:20 ET → then confirmation reruns, then Fable final code review.
