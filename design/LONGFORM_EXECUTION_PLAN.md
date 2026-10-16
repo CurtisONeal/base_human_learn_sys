@@ -128,7 +128,7 @@ the hard stop.
 
 | WP | Status | Commit | Notes |
 |---|---|---|---|
-| Safety copies | in progress | — | `~/Movies/CLE-AI-26_09_safety_copies/`, SHA256SUMS.txt |
+| Safety copies | **done** — 7/7 SHA-256 verified, read-only | — | `~/Movies/CLE-AI-26_09_safety_copies/`. Meetup = 4 parts ≈ 1 h 59 m (30:11, 28:24, 32:21, 28:09); camera-clock start times show ~3 s between parts → one recording split at 4 GB. 3 short clips (4 s, 30 s, 12 s) are test shots. Camera clock wrong (2024-01-01) |
 | WP-0 | **done** — merged | 9fc43cb | 24 tests. Real data: P3 PASS (99.996%, max gap 29 s); transcript has 89 glossary mishearings (67 "cloud code") |
 | WP-1 | **done** — merged | 11775c3 | 15 new tests; 320 pass. Note for WP-6b: `media` still calls whole-file `to_wav()` — must become windowed |
 | WP-6a | in progress (agent, worktree) | | started 2026-10-15 ~22:00 ET |
