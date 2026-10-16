@@ -248,13 +248,29 @@ def longform(
     concurrency: int = typer.Option(1, "--concurrency", help="Chapters summarized in parallel (parts of one chapter stay sequential)"),
     out: Path = typer.Option(None, "--out", help="Output dir (default: the run dir)"),
     on_exhaustion: str = typer.Option(None, "--on-exhaustion"),
+    structure: str = typer.Option(
+        "auto", "--structure",
+        help="Structure ladder start: auto (chapters → outline → cues → windows), "
+             "outline, cues or windows. The outline rung makes ONE model call, "
+             "cached in structure_outline.json; auto tries it only with no "
+             "chapters and > 30 min of media"),
 ):
     """Long-form notes for an EXISTING run dir — no download, no transcription.
 
         longform previous_run_results/<run> --plan-only
+        longform previous_run_results/<run> --plan-only --structure outline
         longform previous_run_results/<run> --only "1,MCP Ecosystem" --out /tmp/pilot
+
+    --plan-only makes no model call, except the one outline call when
+    --structure outline is given explicitly and no outline is cached.
     """
     from video2mdnotes.core import longform as lf
+    from video2mdnotes.core.structure import MODES
+
+    structure = (structure or "auto").strip().lower()
+    if structure not in MODES:
+        console.print(f"[red]--structure must be one of {', '.join(MODES)}[/red]")
+        raise typer.Exit(2)
 
     if on_exhaustion:
         settings.on_exhaustion = on_exhaustion.strip().lower()
@@ -262,12 +278,14 @@ def longform(
     out_dir = Path(out).expanduser() if out else run_dir
     try:
         if plan_only:
-            plan = lf.build_plan(run_dir, out_dir, only=only, write=False)
+            plan = lf.build_plan(
+                run_dir, out_dir, only=only, write=False, structure=structure,
+                outline_complete=lf._default_complete if structure == "outline" else None)
             state = lf.State(out_dir) if (out_dir / lf.STATE_FILENAME).exists() and resume else None
             console.print(lf.describe_plan(plan, state), highlight=False, markup=False)
             return
         result = _longform_waiting(run_dir, out_dir=out_dir, only=only, resume=resume,
-                                   concurrency=max(1, concurrency))
+                                   concurrency=max(1, concurrency), structure=structure)
     except (FileNotFoundError, ValueError) as exc:
         console.print(f"[red]{type(exc).__name__}:[/red] {exc}")
         raise typer.Exit(2)

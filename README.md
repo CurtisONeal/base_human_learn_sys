@@ -641,13 +641,15 @@ python -m video2mdnotes.main longform previous_run_results/<run> \
     --only "1,Sessions management,7" --out /tmp/pilot
 # Everything; chapters in parallel (parts of one chapter stay sequential)
 python -m video2mdnotes.main longform previous_run_results/<run> --concurrency 3
+# No chapters (a meetup): name the talks with ONE outline call, cached, then plan
+python -m video2mdnotes.main longform previous_run_results/<run> --plan-only --structure outline
 ```
 
 What it does, in order: reads `source_meta.json` (or derives it from
 `yt_info.json`), labels the transcript's provenance, writes a glossary-corrected
 copy plus `corrections.json` (the raw transcript is never edited), cuts the
 corrected transcript with the structure ladder (chapters → description list →
-cues → windows; oversize chapters split into parts), then makes **one model
+outline → cues → windows; oversize chapters split into parts), then makes **one model
 call per passage**. Each passage prompt carries the dated source header, the
 course skeleton, every caption line with its `[H:MM:SS]`, a mishearing hint,
 the uncertainty and time-sensitive instructions; part 2+ of a split chapter
@@ -656,6 +658,20 @@ last point — capped at 800 words, oldest dropped first) and its last ~150 s as
 `CONTEXT ONLY`. Prompts: `prompts/longform/` + `prompts/fragments/`. Exam or
 certification metadata selects the `exam-prep` section profile
 (`core/domains.py`), which adds "Exam-relevant points".
+
+**Outline rung** (`--structure {auto,outline,cues,windows}`, default `auto`).
+With no declared chapters and over 30 min of media, `auto` makes one model call
+(`core/outline.py`, the normal failover chain) over a compressed transcript —
+one line per ~30 s plus every talk-transition line ("my name is", "thank
+you", applause, long pauses), ~18k characters for two hours — asking for
+`[{start, title, speaker}]`. `core/structure.py` validates it deterministically
+(2–15 sections, increasing, inside the media, each start snapped to a caption
+line within ±60 s preferring transition lines; sub-minute sections fold into
+the previous one) and falls back to `cues` with the reason in the provenance.
+Titles are the model's and are labelled inferred. The reply is cached in
+`structure_outline.json`, keyed by the transcript, so reruns never re-call;
+delete it to re-ask. `--plan-only` makes that call only when `--structure
+outline` is explicit; otherwise it shows `(+1 outline)` in the call estimate.
 
 **Resumable.** Each finished passage is written to
 `chunk_summaries/<NN>_<slug>_p<i>.md` and `ledger/<NN>_p<i>.json`, with status in
