@@ -13,6 +13,26 @@ Newest first. Format: symptom → cause → fix → how we know.
 
 ---
 
+### One ASR segment ran two minutes and failed P3 (E3, WP-F5)
+- **Symptom:** E3 (CLE-AI meetup, parakeet-mlx) failed P3 with a 122.9 s
+  start-to-start gap at 1:53:41. Nothing was missing: one 229-word segment
+  (111 s in window `03_000`) covered it. The transcript stores start times
+  only, so the evaluator saw a gap, and any citation into that stretch could
+  only point at a two-minute line.
+- **Cause:** parakeet-mlx splits sentences on punctuation only; an unpunctuated
+  run stays one "sentence". No backend capped segment length.
+- **Fix:** `core/asr/segmenting.py` splits any segment over
+  `ASR_MAX_SEGMENT_S` (20 s) / `ASR_MAX_SEGMENT_WORDS` (60) at sentence ends,
+  then clauses, then words, using the engine's token/word timings when present
+  and proportional timing otherwise. All three backends and the stitch apply
+  it. Checkpoints now keep per-segment `words` timings so re-capping never
+  needs re-ASR. End times were not added to transcript lines: every parser
+  requires `]` right after the start time.
+- **How we know:** E3 re-transcribed into `previous_run_results/E3b_cle_ai_meetup/`
+  (numbers in the WP-F5 report / commit). Tests: `tests/test_segmenting.py`
+  (timed split, proportional split, text preserved, monotonic, clip-then-split,
+  checkpoint round trip).
+
 ### The citation audit moved a correct citation on generic words (E1b, WP-F4)
 - **Symptom:** E1b's audit retargeted "`/sandbox` didn't detect them until he
   started a new session" from [8:23:35] — where "sandbox" is said on the cited

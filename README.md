@@ -468,6 +468,15 @@ transcribed span are each ≥ 98 % of the summed duration, and that no gap holds
 silencedetect, and silent windows are recorded as silent, not missing. When the gate fails, no
 transcript is written: the manifest says `complete: false` and the run counts as failed.
 
+**Segment-length cap** (`core/asr/segmenting.py`, every backend and the stitch): a segment longer
+than `ASR_MAX_SEGMENT_S` (20 s) or `ASR_MAX_SEGMENT_WORDS` (60) is split at sentence ends, then
+clause breaks, then word boundaries. Split times come from the engine's word/token timings
+(parakeet-mlx tokens, faster-whisper / mlx-whisper `word_timestamps`); without them, each word gets
+an equal share of the segment. Checkpoints store those timings per segment (`words`), so the
+stitch can re-cap old or new checkpoints without re-running ASR. The transcript lines keep the
+`- [H:MM:SS.mmm] text` form with start times only, because every transcript parser
+(`main.py`, `quality.py`, `eval/longform.py`) expects `]` straight after the start time.
+
 Engine (`ASR_BACKEND=auto`): parakeet-mlx for English, falling back to faster-whisper
 distil-large-v3. Non-English context always gets faster-whisper large-v3 (the `asr_select` policy),
 even over a pin.

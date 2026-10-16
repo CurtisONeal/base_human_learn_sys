@@ -19,12 +19,15 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Protocol, Tuple, runtime_checkable
 
-from video2mdnotes.core.transcriber import Segment
+from video2mdnotes.core.transcriber import Segment, Word
 
 __all__ = [
     "AsrBackend",
     "BackendUnavailable",
     "Segment",
+    "Word",
+    "finalize_segments",
+    "words_from_tokens",
     "module_available",
     "is_apple_silicon",
 ]
@@ -95,9 +98,40 @@ def clip_to_duration(segments: List[Segment], duration: Optional[float]) -> List
         if duration is not None:
             end = min(end, duration)
         if end != s.end:
-            s = Segment(start=s.start, end=end, text=s.text)
+            s = s.model_copy(update={"end": end})
         out.append(s)
     return out
+
+
+def finalize_segments(segments: List[Segment], duration: Optional[float]) -> List[Segment]:
+    """What every backend returns: clipped to the audio, then length-capped.
+
+    Clip first so the split works inside [start, min(end, duration)] — the
+    parts of a split segment never extend past the audio either.
+    """
+    from video2mdnotes.core.asr.segmenting import split_long_segments
+
+    return split_long_segments(clip_to_duration(segments, duration))
+
+
+def words_from_tokens(tokens) -> List[Word]:
+    """Sub-word tokens (text, start, end) -> whitespace words with timings.
+
+    A token whose text starts with whitespace begins a new word; any other
+    token continues the current one (parakeet's SentencePiece convention).
+    The words' texts concatenate to exactly the tokens' texts.
+    """
+    words: List[Word] = []
+    for t in tokens:
+        text, start, end = t.text, float(t.start), float(t.end)
+        if not text:
+            continue
+        if words and not text[:1].isspace():
+            w = words[-1]
+            words[-1] = Word(start=w.start, end=max(w.end, end), text=w.text + text)
+        else:
+            words.append(Word(start=start, end=max(end, start), text=text))
+    return words
 
 
 def module_available(module: str) -> bool:

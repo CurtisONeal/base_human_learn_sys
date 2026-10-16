@@ -12,8 +12,8 @@ from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
 from video2mdnotes.core.asr.base import (
-    BackendUnavailable, Segment, clip_to_duration, is_apple_silicon,
-    module_available, wav_duration,
+    BackendUnavailable, Segment, finalize_segments, is_apple_silicon,
+    module_available, wav_duration, words_from_tokens,
 )
 
 DEFAULT_MODEL = "mlx-community/parakeet-tdt-0.6b-v3"
@@ -68,9 +68,13 @@ class ParakeetMlxBackend:
             overlap_duration=self.overlap_duration,
         )
         self.last_language = None  # the engine does not report one
+        # Sentences first (the engine's own punctuation split); each carries
+        # its tokens' timings as words so an over-long sentence is split at
+        # real word times (measured: one 229-word, 123 s "sentence" on E3).
         segs = [
-            Segment(start=float(s.start), end=float(s.end), text=" " + s.text.strip())
+            Segment(start=float(s.start), end=float(s.end), text=" " + s.text.strip(),
+                    words=words_from_tokens(getattr(s, "tokens", None) or []) or None)
             for s in result.sentences
             if s.text.strip()
         ]
-        return clip_to_duration(segs, wav_duration(wav_path))
+        return finalize_segments(segs, wav_duration(wav_path))
