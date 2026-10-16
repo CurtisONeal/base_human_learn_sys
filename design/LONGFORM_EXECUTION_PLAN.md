@@ -223,3 +223,8 @@ _(append each run: date, eval, P1–P8 results, cost, decision)_
 - E2c **P8 PASS 19 S / 0 P / 0 U / 1 N/A** — reviewer: better than E2b; arithmetic, false markers, plan-mode attribution, synthesis wording fixed; consistency annotations mostly right.
   Remaining: new leaked citation-repair variants ("[8:58:25 is not used — see below]", "[9:37:41 not used]") — normaliser pattern too narrow; ch. 7 missing from plan-mode theme; one overstated "no tools at all"; one "superseded" that should be "discrepancy"; one consistency pointer at wrong time.
 - **Final status: E1b, E2/E2b/E2c, E3b/E3c all pass P1–P8.** Next: Fable code review → final fix package (review findings + leak variants + names/privacy) → final rerun.
+
+### 2026-10-16 ~01:15 ET · Final code review (Claude Fable 5.1, Anthropic API credit)
+- One call over main..longform-pipeline (src, prompts, scripts) + plan + AGENTS.md: 212,884 input tokens (counted), output ≤ 64k → cost ≤ ~$5.33 (exact usage line lost to a script bug after the review was saved). Saved as `design/FINAL_CODE_REVIEW_fable.md`.
+- Findings: seam speech loss in longasr overlap dedupe; --no-resume replayed after wait; whole-file decode when duration unknown and in `process` for caption-less long videos (hard-constraint gaps); billed-but-failed metered calls unrecorded; cap check not atomic at concurrency 3; `anthropic/*` routes not blocked; no /Volumes guard in `media`; fragile acronym casing from description; "today" filter drops product claims; single historical date can trigger recorded banner.
+- **WP-F9** (all of the above + E2c/E3c leftovers: leak variants, ch. 7 theme tag, names/privacy, consistency labels/pointers) started.
