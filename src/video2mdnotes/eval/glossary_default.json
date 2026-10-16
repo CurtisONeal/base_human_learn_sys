@@ -1,0 +1,17 @@
+{
+  "description": "Known transcription mishearings for Anthropic / Claude content. Each entry is an EXPLICIT wrong form, matched case-insensitively on word boundaries. Never add a bare common word (e.g. 'cloud') -- 'cloud provider', 'cloud computing', 'cloud API' are legitimate phrases and must not be flagged. Correct spellings in any casing (e.g. 'claude code') are not mishearings.",
+  "entries": [
+    {"wrong": "cloud code", "right": "Claude Code"},
+    {"wrong": "cloud codes", "right": "Claude Code's"},
+    {"wrong": "clawed code", "right": "Claude Code"},
+    {"wrong": "claw code", "right": "Claude Code"},
+    {"wrong": "clawed", "right": "Claude"},
+    {"wrong": "cloud agent sdk", "right": "Claude Agent SDK"},
+    {"wrong": "cloud.md", "right": "CLAUDE.md"},
+    {"wrong": "cloud md", "right": "CLAUDE.md"},
+    {"wrong": "cloud sonnet", "right": "Claude Sonnet"},
+    {"wrong": "cloud opus", "right": "Claude Opus"},
+    {"wrong": "cloud haiku", "right": "Claude Haiku"}
+  ],
+  "must_not_flag": ["cloud provider", "cloud computing", "cloud API", "claude code", "Claude"]
+}

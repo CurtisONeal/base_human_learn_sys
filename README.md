@@ -623,6 +623,28 @@ uv run ruff check . --fix
 uv run ruff format .
 ```
 
+### Long-form eval harness (P1–P8)
+
+`scripts/eval_longform.py` scores a long-form run directory against the pass
+criteria in `design/LONGFORM_EXECUTION_PLAN.md`. It is deterministic and calls
+no model. The run-directory contract it reads (`summaries/`, `transcripts/`,
+`source_meta.json`, `corrections.json`, the `## Time-Sensitive Claims` table) is
+in the docstring of `src/video2mdnotes/eval/longform.py`.
+
+```bash
+.venv/bin/python scripts/eval_longform.py <run_dir> \
+    --expected-chapters tests/fixtures/eval_longform/cca_f_expected_chapters.txt
+```
+
+It writes `eval_report.json`, `eval_report.md` and `p8_sample.json` to
+`<run_dir>/eval/` (or `--out`), and exits 0 only if P1–P7 all pass. P8 is
+recorded as "pending reviewer": `p8_sample.json` holds 20 seeded, cited claim
+bullets with ±60 s of transcript each, for an independent reviewer agent to
+judge. `--criteria P3` runs a subset (the report is marked partial);
+`--scan-transcript` also counts glossary mishearings in the transcript. The
+glossary (`src/video2mdnotes/eval/glossary_default.json`) lists explicit wrong
+forms only, so "cloud provider" and "cloud computing" are never flagged.
+
 ---
 
 ## Keeping the docs true
