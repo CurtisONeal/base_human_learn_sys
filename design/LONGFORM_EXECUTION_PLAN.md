@@ -200,3 +200,4 @@ _(append each run: date, eval, P1–P8 results, cost, decision)_
 - Splits at 2:57:30, 5:29:13, 8:19:35: no loss; minor reinforcing overlap. Course map ranges exact; themes topics-not-verdicts but fragmented across batches. MCP chapter + Introduction: nothing important missing.
 - Reviewer judgement: "genuinely useful for someone preparing for the CCA-F … as a structured companion."
 - Defects → **WP-F7**: leaked citation-repair text; cross-batch theme consolidation; ephemeral time-sensitive rows; recording-lag inference (spoken "April 23rd" vs published 2026-07-20); attribution/overstatement prompt rules.
+- WP-F5 merged (cfcf297): segments capped 20 s/60 words via word timings; E3b re-ASR: max segment 19.8 s, max start gap 49.8 s, P3 PASS; words identical (17,507).
