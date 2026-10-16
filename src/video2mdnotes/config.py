@@ -301,16 +301,16 @@ class Settings(BaseSettings):
     fw_compute: str = "auto" # auto, int8, float16, int8_float16
     fw_lang: str = "en"
 
-    # Long-recording ASR (core/longasr.py). Media longer than
-    # ASR_LONG_THRESHOLD_S — or any camera-split multi-part group — is
-    # transcribed in bounded windows, never converted whole to one wav.
+    # Windowed ASR (core/longasr.py). EVERY local recording and every
+    # caption-less download is transcribed in bounded windows (a short clip is
+    # one window) — never converted whole to one wav. There is no length
+    # threshold any more (WP-F9): the rule is structural, not conditional.
     #   ASR_BACKEND: "auto" (parakeet-mlx when available and the material is
     #   English; else faster-whisper:distil-large-v3; non-English context always
     #   faster-whisper:large-v3), or an explicit "name[:model]".
     asr_backend: str = "auto"
     asr_window_s: float = 1500.0
     asr_overlap_s: float = 8.0
-    asr_long_threshold_s: float = 1200.0
     # Completeness gate: longest allowed un-transcribed stretch that is not
     # detected silence, and the minimum audio coverage of the summed duration.
     asr_max_gap_s: float = 120.0

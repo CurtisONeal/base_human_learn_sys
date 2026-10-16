@@ -16,8 +16,15 @@ import pytest
 
 from video2mdnotes.core.media import (
     SUPPORTED, EncryptedMediaError, MediaInfo, NoAudioStreamError,
-    UnreadableMediaError, describe, find_media, probe, to_wav,
+    UnreadableMediaError, describe, extract_window, find_media, probe,
 )
+
+
+def to_wav(source, dest, info=None):
+    """Decode a whole (short) fixture through the one real decode path: a
+    bounded window covering the file."""
+    info = info or probe(source)
+    return extract_window(source, dest, 0.0, info.duration_seconds + 1.0)
 
 ffmpeg_present = pytest.mark.skipif(
     shutil.which("ffmpeg") is None, reason="ffmpeg not installed"
@@ -194,6 +201,31 @@ def test_supported_covers_the_formats_consumer_recorders_emit():
 
 # --- CLI integration -------------------------------------------------------
 
+
+class _OneSegmentBackend:
+    """Fake ASR engine for the windowed path: one segment per window."""
+    name, model, supports_prompt, last_language = "fake", "m1", False, "en"
+
+    def __init__(self, text="hello there"):
+        self.text = text
+
+    def available(self):
+        return True, "ok"
+
+    def load(self):
+        pass
+
+    def transcribe(self, wav_path, initial_prompt=None, language=None):
+        from video2mdnotes.core.transcriber import Segment
+        return [Segment(start=0.0, end=1.0, text=self.text)]
+
+
+def _fake_asr(monkeypatch, text="hello there"):
+    from video2mdnotes.core import longasr
+    backend = _OneSegmentBackend(text)
+    monkeypatch.setattr(longasr, "select_backend", lambda **k: (backend, "test"))
+    return backend
+
 @ffmpeg_present
 def test_media_command_produces_the_same_artifacts_as_a_video(tmp_path, monkeypatch):
     """WP-03 acceptance: same artifact shape, origin is the file path."""
@@ -207,14 +239,7 @@ def test_media_command_produces_the_same_artifacts_as_a_video(tmp_path, monkeypa
     source = _encode(tmp_path / "meeting.m4a", codec="aac", rate=44100, channels=1)
     monkeypatch.setattr(settings, "output_dir", tmp_path / "out")
 
-    transcript = TranscriptResult(
-        source_file=tmp_path / "x.wav", language="en",
-        segments=[Segment(start=0, end=2, text="hello there")],
-        full_text="hello there", markdown_content="# T\n\n- [0:00:00.000] hello there",
-        model_name="medium", generated_at=dt.datetime.now(),
-    )
-    monkeypatch.setattr("video2mdnotes.main.transcribe_audio",
-                        lambda *a, **k: transcript)
+    _fake_asr(monkeypatch)
     monkeypatch.setattr("video2mdnotes.main.generate_summary",
                         lambda t: SummaryResult(
                             source_file=tmp_path / "x.wav", model_name="test",
@@ -238,12 +263,7 @@ def test_transcript_survives_a_summarizer_failure(tmp_path, monkeypatch):
 
     source = _encode(tmp_path / "talk.mp3", codec="libmp3lame", rate=16000, channels=1)
     monkeypatch.setattr(settings, "output_dir", tmp_path / "out")
-    monkeypatch.setattr("video2mdnotes.main.transcribe_audio", lambda *a, **k:
-        TranscriptResult(
-            source_file=tmp_path / "x.wav", language="en",
-            segments=[Segment(start=0, end=1, text="real words")],
-            full_text="real words", markdown_content="# T\n\n- [0:00:00.000] real words",
-            model_name="medium", generated_at=dt.datetime.now()))
+    _fake_asr(monkeypatch, "real words")
     monkeypatch.setattr("video2mdnotes.main.generate_summary",
                         lambda t: (_ for _ in ()).throw(RuntimeError("provider down")))
 
@@ -266,7 +286,8 @@ def test_probe_mode_transcribes_nothing(tmp_path, monkeypatch):
     def _boom(*a, **k):
         raise AssertionError("--probe transcribed something")
 
-    monkeypatch.setattr("video2mdnotes.main.transcribe_audio", _boom)
+    from video2mdnotes.core import longasr
+    monkeypatch.setattr(longasr, "transcribe_long", _boom)
     monkeypatch.setattr("video2mdnotes.main.generate_summary", _boom)
     result = CliRunner().invoke(app, ["media", str(source), "--probe"])
     assert result.exit_code == 0

@@ -5,7 +5,7 @@ from pydantic import BaseModel, HttpUrl
 from video2mdnotes.config import settings
 from video2mdnotes.logger import logger
 from video2mdnotes.core.downloader import fetch_audio, probe_source
-from video2mdnotes.core.transcriber import transcribe_audio, build_initial_prompt
+from video2mdnotes.core.transcriber import build_initial_prompt
 from video2mdnotes.core.summarizer import generate_summary
 from video2mdnotes.core.captions import transcript_from_captions
 import shutil
@@ -48,29 +48,33 @@ def process_pipeline(url: str):
                     title=source.title, subtitles=source.subtitles
                 )
 
-            audio_path = None
-            if transcript_result is None:
-                audio_path = fetch_audio(source)
-                initial_prompt = build_initial_prompt(
-                    title=source.title,
-                    tags=source.tags,
-                    description=source.description
-                )
-                transcript_result = transcribe_audio(
-                    audio_path,
-                    title=source.title,
-                    initial_prompt=initial_prompt
-                )
-            logger.info(f"API: Transcript via {transcript_result.transcript_source}")
-
-            summary_result = generate_summary(transcript_result)
-
-            # Archiving logic (same as CLI)
             from video2mdnotes.core.downloader import sanitize_filename
             safe_title = sanitize_filename(source.title)
             date_str = dt.date.today().strftime('%Y%m%d')
             project_dir_name = f"{date_str}_{safe_title}"
             project_dir = settings.output_dir / project_dir_name
+
+            audio_path = None
+            if transcript_result is None:
+                # Same path as the CLI: windowed ASR over the native download,
+                # never one whole-file wav.
+                from video2mdnotes.core import longasr
+                audio_path = fetch_audio(source, convert=False)
+                initial_prompt = build_initial_prompt(
+                    title=source.title,
+                    tags=source.tags,
+                    description=source.description
+                )
+                transcript_result = longasr.transcribe_media(
+                    [audio_path], run_dir=project_dir, title=source.title,
+                    metadata_text=f"{source.title} {source.description or ''}",
+                    initial_prompt=initial_prompt, progress=logger.info,
+                ).result
+            logger.info(f"API: Transcript via {transcript_result.transcript_source}")
+
+            summary_result = generate_summary(transcript_result)
+
+            # Archiving logic (same as CLI)
             project_dir.mkdir(parents=True, exist_ok=True)
 
             transcripts_dir = project_dir / "transcripts"
