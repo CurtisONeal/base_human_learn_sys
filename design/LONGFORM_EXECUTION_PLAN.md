@@ -136,7 +136,7 @@ the hard stop.
 | WP-4 | in progress (agent, worktree) | | wave 2, started ~22:40 ET |
 | WP-8 | **done** — merged | 9358c31 | 339 pass. Open: VLM step bypasses ledger (frames off by default); Nous prices unverified; hermes proxy default 127.0.0.1:8645 |
 | WP-3 | pending | | |
-| WP-5 | in progress (agent, worktree) | | wave 2, started ~22:40 ET |
+| WP-5 | **done** — merged | 3f668e5 | notes_format.py; WP-3 MUST call validate_time_sensitive (fill) before stamp_notes or P5 fails |
 | WP-7 | pending | | |
 | WP-6b | pending | | |
 | E1 | pending | | |
