@@ -92,8 +92,13 @@ def resolve_as_of(meta: SourceMeta, captured_at: Any = None) -> AsOf:
     if meta.published_at:
         return AsOf(meta.published_at, "published")
     recorded = _as_date(meta.recorded_at)
+    # A device whose clock was never set (or lost power) typically boots to
+    # January 1 of some year — the CLE-AI meetup camera reads 2024-01-01 for a
+    # 2026 recording. A Jan 1 device date is a reset default, not evidence.
+    reset_default = bool(recorded and recorded.month == 1 and recorded.day == 1)
     if (
         recorded
+        and not reset_default
         and recorded.year >= _MIN_PLAUSIBLE_RECORDED_YEAR
         and (captured is None or recorded <= captured)
     ):

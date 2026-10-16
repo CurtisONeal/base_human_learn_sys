@@ -134,6 +134,11 @@ def test_recorded_date_used_when_plausible_and_reset_clock_ignored():
     reset = SourceMeta(source_id="r", captured_at=CAPTURED,
                        recorded_at=dt.datetime(2000, 1, 1))
     assert _fm_dict(frontmatter(reset))["as_of_basis"] == "captured"
+    # The CLE-AI meetup camera booted to 2024-01-01 for a 2026 recording: a
+    # Jan 1 device date in a plausible year is still a reset default.
+    jan1 = SourceMeta(source_id="r", captured_at=CAPTURED,
+                      recorded_at=dt.datetime(2024, 1, 1, 12, 59, 26))
+    assert _fm_dict(frontmatter(jan1))["as_of_basis"] == "captured"
 
 
 def test_extra_keys_and_collision(cca_meta):
