@@ -187,3 +187,10 @@ _(append each run: date, eval, P1–P8 results, cost, decision)_
 - Meetup date: no September 2026 CLE-AI event in calendar or vault; not guessed. Camera clock reads 2024-01-01 (reset default) — fix 4527d77: Jan 1 device dates no longer become `as_of` (falls back to captured, labelled).
 - E3 structure: no chapters → rung `cues` (5 inferred sections, generic titles). P1 for E3 graded against the pipeline's own inferred sections (consistency only — approved E3 rule: rung recorded).
 - E3 long-form run started 23:4x ET.
+
+### 2026-10-15 23:34–23:37 ET · E3 meetup notes (first attempt)
+- 5 passages + course map, 2 m 18 s, claude-cli only. as_of 2026-10-15 basis captured (camera date rejected) ✔.
+- P1 PASS 5/5 (inferred sections) · P2 PASS 687/687 · **P3 FAIL** (1 gap 122.9 s at 1:53:41) · P4 PASS · P5 PASS 56/56 · P6 PASS · P7 PASS (0 corrections — no glossary matched meetup metadata).
+- P3 root cause: parakeet emitted one 229-word segment (~2 min); md stores start times only, so start-to-start gap = 123 s although the ASR gate (end times) saw max 48 s. Real defect: coarse citations.
+- Usefulness defect (not in the bar): cue-rung sections cut across talks and carry generic titles, while the Course Map itself identifies the 5+ talks.
+- Fix packages: **WP-F5** split long ASR segments at sentence/token timestamps (cap 20 s / 60 words), store timings in checkpoints; re-ASR into E3b. **WP-F6** `outline` structure rung (one model call → talk/topic boundaries + titles, validated, snapped, cached, fallback to cues).
