@@ -215,3 +215,8 @@ _(append each run: date, eval, P1–P8 results, cost, decision)_
 - WP-F8 (final improvements: cross-section consistency call, quantity attribution, ASR name hedging, relative-date event estimate, fuzzy audit, Check: rule, theme tagging) started 2026-10-16 ~00:20 ET → then confirmation reruns, then Fable final code review.
 - WP-F8 merged (57f5211, 644 pass): consistency call (E3b smoke: giveaway contradiction found ×3 and annotated; 95 %/80 % discrepancy annotated on 1 of 3 repeats), quantity attribution rule, ASR-name hedging + names table, relative-date event estimate (E3b → 2026-09/10 from "May of 26 … five months ago"), fuzzy audit (E2b's 2 false "unverified" cleared), Check: rule + lint, theme tag completion.
 - Confirmation reruns started 2026-10-16 ~00:55 ET: E3c (fresh outline call) then E2c, each followed by eval + independent P8 review. Then Fable final code review.
+
+### 2026-10-16 00:39–00:54 ET · E3c + E2c confirmation reruns (after F8)
+- E3c: P1–P7 PASS (10/10, 972/972, 61/61). **P8 PASS 19 S / 0 P / 0 U / 1 N/A.** Reviewer: better than E3b — giveaway superseded ×3, 95 %/80 % attributed + discrepancy, host no longer credited to sponsor, event date 2026-09/10 labelled inference.
+  Remaining (names): "Archer" chosen over better-supported "Harsha" (names table misses variant); organiser surnames unhedged (incl. "Curtis O'Neill" — the user's own name, likely O'Neal); giveaway line still leads with the false clause before the tag; raffle winner's name+employer printed from ASR (privacy/accuracy); an unneeded "(probably) Arista" introduced in response to a faulty E3b review comment.
+- E2c: P1–P7 PASS (13/13, 2558/2558, 133/133); P8 review running. Fable 5.1 final code review running.
