@@ -15,6 +15,7 @@ from video2mdnotes.core.downloader import DownloadResult, fetch_audio, probe_sou
 from video2mdnotes.core.transcriber import transcribe_audio, build_initial_prompt
 from video2mdnotes.core.summarizer import (
     EMPTY_TRANSCRIPT_PLACEHOLDER,
+    BudgetExhausted,
     SubscriptionExhausted,
     generate_summary,
 )
@@ -310,6 +311,12 @@ def media(
                 console.print(f"      [red]Stopping:[/red] {exc}")
                 failed += 1
                 break
+        except BudgetExhausted as exc:
+            # Spend caps reached: every later file would fail the same way.
+            console.print(f"      [red]Stopping (spend cap):[/red] {exc} "
+                          "[dim](transcript kept)[/dim]")
+            failed += 1
+            break
         except Exception as exc:  # noqa: BLE001
             console.print(f"      [red]Summary failed:[/red] {exc} "
                           "[dim](transcript kept)[/dim]")
@@ -601,6 +608,9 @@ def _summarize_and_write_document(
         else:
             console.print(f"      [red]Stopping:[/red] {exc}")
             return "stop"
+    except BudgetExhausted as exc:
+        console.print(f"      [red]Stopping (spend cap):[/red] {exc}")
+        return "stop"
     except Exception as exc:  # noqa: BLE001
         console.print(f"      [red]Failed:[/red] {exc}")
         logger.error(f"{source.title}: {exc}")
@@ -993,6 +1003,12 @@ def process(
             # rather than burn the rest of the playlist on failures or spend.
             logger.error(f"[{position}] Subscription exhausted: {e}")
             stopped_at = f"{position} — {source.title}"
+            break
+        except BudgetExhausted as e:
+            # Spend caps reached; the transcript is already on disk, so a
+            # re-run after raising the cap resumes from here.
+            logger.error(f"[{position}] Spend cap reached: {e}")
+            stopped_at = f"{position} — {source.title} (spend cap)"
             break
         except KeyboardInterrupt:
             stopped_at = f"{position} — {source.title} (interrupted)"

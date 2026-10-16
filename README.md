@@ -250,6 +250,29 @@ ceiling, but every run costs money and a full transcript is a large prompt. Thes
 keys are often shared with other tools on the same machine, so the usage lands on
 the same bill.
 
+**2b. OpenAI-compatible: Nous (`nous/…`) and the Hermes proxy (`hermes/…`)**
+
+`nous/Hermes-4-405B` calls the Nous inference API at `NOUS_API_BASE`
+(default `https://inference-api.nousresearch.com/v1`) with `NOUS_API_KEY`.
+`hermes/Hermes-4-70B` calls a local `hermes proxy start` endpoint at
+`HERMES_PROXY_BASE` (default `http://127.0.0.1:8645/v1`); the proxy accepts any
+bearer and attaches your Nous Portal OAuth credential itself. The proxy is
+**not** started by this pipeline. Both are treated as metered, and both are
+billed to the `nous` ledger provider by default (`HERMES_PROXY_PROVIDER`).
+
+**Spend caps (every metered entry).** Before each metered call the worst case —
+prompt tokens plus `METERED_MAX_OUTPUT_TOKENS` of output — is priced and checked
+against a persistent ledger (`COST_LEDGER_PATH`, default
+`previous_run_results/_cost_ledger.json`). `METERED_USD_CAP` (default `$10`) caps
+all metered providers combined; `PROVIDER_USD_CAPS='{"openai":10,"nous":5}'`
+adds per-provider caps. A call that would exceed a cap is refused **without being
+made** and the chain moves to the next entry (e.g. `openai` → `nous`); when every
+metered entry is capped the run stops with `BudgetExhausted` (finished work kept,
+re-run resumes). `claude-cli/…` calls are recorded at $0 and never blocked. An
+unreadable ledger refuses metered calls rather than assuming nothing was spent.
+Delete or re-point the ledger to start a fresh budget. Not covered: the vision
+tier (`VLM_MODEL`), which still bills outside the ledger.
+
 **3. Local models (`ollama/…`, `lm_studio/…`) — privacy option, off by default**
 
 ```
@@ -435,7 +458,7 @@ backend by default. `--on-exhaustion` controls what happens instead:
 | Mode | Behavior |
 |---|---|
 | `wait` *(default)* | Alert, sleep until the limit resets, retry the same video. Uses a reset time from the CLI when it reports one, else `EXHAUSTION_WAIT_SECONDS`. |
-| `metered` | Continue on the paid backends in `LLM_MODELS`. |
+| `metered` | Continue on the paid backends in `LLM_MODELS`, within the spend caps. |
 | `local` | Continue on local backends only (needs `ALLOW_LOCAL_MODELS`). Never reaches a paid backend. |
 | `stop` | Stop cleanly. Finished videos are kept and skipped on resume. |
 | `ask` | Prompt once, then apply that answer for the rest of the run. |
@@ -444,6 +467,12 @@ backend by default. `--on-exhaustion` controls what happens instead:
 cannot answer a prompt — must not begin spending money merely because nobody was
 there to say no; it waits for capacity already paid for. `ask` degrades to
 `wait`, not to spending, when there is no TTY.
+
+`ALLOW_METERED_FALLBACK=true` lets an exhausted run continue on the metered
+entries without changing `ON_EXHAUSTION` (it does not override `local`). Those
+calls are bounded by the spend caps above; once the caps are spent too, the run
+falls back to `ON_EXHAUSTION` (by default: wait for the reset). With it `false`
+(the default), behaviour is exactly the table above.
 
 Exhaustion is also distinguished from ordinary failure: a crashed backend still
 fails over normally, and one bad video no longer abandons the rest of a

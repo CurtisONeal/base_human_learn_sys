@@ -23,6 +23,12 @@ class Settings(BaseSettings):
     #   "ollama/…", "lm_studio/…", …
     #                         -> local/self-hosted via litellm; needs NO key, so
     #                            it is gated behind allow_local_models (below).
+    #   "nous/<model>"        -> Nous inference API (OpenAI-compatible) at
+    #                            nous_api_base with nous_api_key. Metered.
+    #   "hermes/<model>"      -> local `hermes proxy` (OpenAI-compatible, OAuth
+    #                            credential attached by the proxy). Treated as
+    #                            metered and billed to hermes_proxy_provider.
+    # Every metered call is checked against the cost ledger caps first.
     llm_models: list[str] = [
         "claude-cli/opus",     # subscription, deepest analysis
         "claude-cli/sonnet",   # subscription, faster fallback
@@ -63,6 +69,45 @@ class Settings(BaseSettings):
 
     openai_api_key: str | None = None
     anthropic_api_key: str | None = None
+
+    # Escalate to METERED backends when the subscription is exhausted, without
+    # changing ON_EXHAUSTION. False keeps the policy above exactly as it is
+    # (default "wait": no paid call). True lets an exhausted run continue on the
+    # paid entries in LLM_MODELS, still bounded by the spend caps below; when
+    # those are spent too, SubscriptionExhausted is raised so the run waits
+    # (or stops) per ON_EXHAUSTION.
+    allow_metered_fallback: bool = False
+
+    # Hard spend caps, enforced by core/costs.py BEFORE each metered call using
+    # a worst-case estimate (prompt tokens + METERED_MAX_OUTPUT_TOKENS).
+    # METERED_USD_CAP covers all metered providers combined; PROVIDER_USD_CAPS
+    # adds optional per-provider caps, keyed by ledger provider name, e.g.
+    #   PROVIDER_USD_CAPS='{"openai": 10, "nous": 5}'
+    # A capped provider is skipped and the chain moves to the next one; when all
+    # are capped the run stops with BudgetExhausted. claude-cli/ (subscription)
+    # calls are recorded at $0 and are never blocked.
+    metered_usd_cap: float = 10.0
+    provider_usd_caps: dict[str, float] = {}
+    # Passed as max_tokens on metered calls, so the estimate is a real bound.
+    metered_max_output_tokens: int = 16000
+    # Persistent ledger shared by every run pointed at it. Delete or re-point
+    # to start a fresh budget.
+    cost_ledger_path: Path = BASE_DIR / "previous_run_results" / "_cost_ledger.json"
+    # Optional run id recorded with each ledger entry (default: per process).
+    run_id: str = ""
+
+    # Nous inference API (OpenAI-compatible). Chain entries "nous/<model>",
+    # e.g. "nous/Hermes-4-405B", are sent to this base with NOUS_API_KEY.
+    nous_api_base: str = "https://inference-api.nousresearch.com/v1"
+    nous_api_key: str | None = None
+    # Local Hermes subscription proxy (`hermes proxy start`), which forwards
+    # OpenAI-compatible requests to an OAuth provider and attaches the real
+    # credential itself — any bearer is accepted. Entries "hermes/<model>",
+    # e.g. "hermes/Hermes-4-70B". The proxy must be started separately.
+    hermes_proxy_base: str = "http://127.0.0.1:8645/v1"
+    # Ledger/cap name for hermes/ entries: the upstream the proxy bills, so a
+    # PROVIDER_USD_CAPS "nous" cap covers Nous direct and Nous-via-proxy alike.
+    hermes_proxy_provider: str = "nous"
 
     # Deprecated: retained for backward-compat with existing .env / docker-compose
     # (LLM_MODE / LLM_PROVIDER / LLM_MODEL, openai_model / anthropic_model).
