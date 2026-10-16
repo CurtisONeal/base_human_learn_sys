@@ -274,3 +274,30 @@ def test_e1b_replay_keeps_correct_citations(tmp_path):
     assert moves == [("[8:51:18]", "8:48:57")]        # Bash(npx) written at 8:48:55-57
     p1 = (run / "chunk_summaries" / "07_claude_code_configuration_permissions_sa_p1.md").read_text()
     assert "n/a]" not in p1 and "[7:53:33][7:55:55][7:53:55]" in p1
+
+
+def test_out_of_range_citation_is_dropped_and_logged():
+    """E2d (2026-10-16): a passage ending at 12:38:36 cited "[12:42:00]" between
+    two correct neighbours — past the end of the video. It is removed, logged,
+    and the line keeps its valid citations."""
+    from video2mdnotes.core.citations import drop_out_of_range, _parse_ts
+
+    line = ('- **No escalation path yet:** asked "can I talk to a human?", the agent '
+            'replied that it had no transfer function [12:26:35] [12:42:00] [12:26:42].')
+    lo, hi = _parse_ts("12:14:57"), _parse_ts("12:38:34")
+    out, log = drop_out_of_range(line, lo, hi)
+    assert "[12:42:00]" not in out
+    assert "[12:26:35]" in out and "[12:26:42]" in out
+    assert [e["original_ts"] for e in log] == ["12:42:00"]
+    assert "unverified" not in out
+
+
+def test_out_of_range_only_citation_marks_line_unverified_and_ranges_untouched():
+    from video2mdnotes.core.citations import drop_out_of_range, _parse_ts
+
+    lo, hi = _parse_ts("0:10:00"), _parse_ts("0:20:00")
+    out, log = drop_out_of_range("- A claim [1:30:00].\n## Ch [0:10:00–0:20:00]", lo, hi)
+    first, heading = out.split("\n")
+    assert "[1:30:00]" not in first and "unverified" in first
+    assert heading == "## Ch [0:10:00–0:20:00]"
+    assert len(log) == 1

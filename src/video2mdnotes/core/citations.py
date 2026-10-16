@@ -820,6 +820,38 @@ def _unmark(line: str) -> str:
     return line.replace(" " + UNVERIFIED_MARK, "").replace(UNVERIFIED_MARK, "")
 
 
+# A lone bracketed timestamp, not part of a range like [1:00:00–1:05:00].
+_LONE_TS = re.compile(r"\s?\[(\d{1,2}:\d{2}(?::\d{2})?)\](?![–-])")
+OUT_OF_RANGE_SLACK_S = 120.0
+
+
+def drop_out_of_range(notes: str, lo: float, hi: float,
+                      slack: float = OUT_OF_RANGE_SLACK_S) -> Tuple[str, List[dict]]:
+    """Remove citations that point outside the passage (E2d: the model wrote
+    "[12:26:35] [12:42:00] [12:26:42]" in a passage ending at 12:38:36 — a
+    garbled copy of its neighbour). A line left with no citation is marked
+    unverified; every removal is logged."""
+    entries: List[dict] = []
+    out = []
+    for i, line in enumerate(notes.split("\n")):
+        bad = [m for m in _LONE_TS.finditer(line)
+               if not (lo - slack <= _parse_ts(m.group(1)) <= hi + slack)]
+        if bad:
+            new = line
+            for m in reversed(bad):
+                new = new[:m.start()] + new[m.end():]
+            if not CITE_RE.search(new):
+                new = _mark_unverified(new, "bullet")
+            for m in bad:
+                entries.append({"rule": "citation:out_of_range", "changed": True,
+                                "original_ts": m.group(1), "new_ts": None,
+                                "claim": line.strip()[:200], "notes_line": i + 1,
+                                "passage_range": [hms(lo), hms(hi)]})
+            line = new
+        out.append(line)
+    return "\n".join(out), entries
+
+
 def audit_notes(notes: str, caption_lines: Sequence[Tuple[float, str]],
                 raw_lines: Optional[Sequence[Tuple[float, str]]] = None,
                 ) -> Tuple[str, List[dict]]:
@@ -830,9 +862,10 @@ def audit_notes(notes: str, caption_lines: Sequence[Tuple[float, str]],
     if not caption_lines:
         return notes, []
     index = PassageIndex(caption_lines, raw_lines)
-    entries: List[dict] = []
+    notes, oor = drop_out_of_range(notes, caption_lines[0][0], caption_lines[-1][0])
     notes, entries = normalize_citation_commentary(
         notes, caption_validator([t for t, _ in caption_lines]))
+    entries = oor + entries
     notes, n_markers = normalize_citation_markers(notes)
     lines = notes.split("\n")
     for unit in iter_units(notes):
