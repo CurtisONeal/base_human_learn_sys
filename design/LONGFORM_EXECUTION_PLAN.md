@@ -140,8 +140,8 @@ the hard stop.
 | WP-7 | folded into WP-3 | | |
 | WP-6b | **done** — merged | 1c9ce1f, 0ea99a1 | E3 ASR: 4 parts auto-grouped, parakeet 8 windows, 223 s wall, 17,507 words, gate PASS (coverage 100 %, span 99.96 %, max gap 48 s); seam-duplicate bug found+fixed; resume verified (re-stitch 1.9 s) |
 | E1 | **PASS** (E1b: P1–P7 + P8 20/20) | | see eval log; WP-F4 polish before E2 |
-| E2 | **PASS** (E2 and E2b, P1–P8) | | 9 min, 17 passages, ~39k words |
-| E3 | **PASS** (E3b, P1–P8 20/20) | | after F5 (segment cap) + F6 (outline rung) |
+| E2 | **PASS** (E2, E2b, E2c, E2d — P1–P8) | | 9 min, 17 passages, ~38k words; resume verified on E2d |
+| E3 | **PASS** (E3b–E3e, P1–P8) | | E3d = full pipeline from safety copies; E3e = with real event metadata |
 
 ## Eval log
 
@@ -244,3 +244,14 @@ _(append each run: date, eval, P1–P8 results, cost, decision)_
 - **E2d resume**: 14 passages from checkpoint, 3 new calls — **resume after a real usage-limit stop verified on real data**. First grading P2 FAIL 2396/2397: model cited [12:42:00] past the video end. **Fix** e871101: out-of-range citation guard in the audit (logged, ranges untouched; replay on real E2d removes exactly that one). Re-audit + reassembly (0 passage calls): P1–P7 PASS (2396/2396).
 - Final independent P8 reviews running for E3e and E2d.
 - **E3e P8 PASS 20/20** (0 partial). Reviewer: "reliable as a record of what was said in the five talks"; privacy respected (raffle winner absent from every output file). Gaps were event-level: metadata not shown → fixed same morning (`## About this source` block, verbatim + labelled; skipped for YouTube; reassembled with 0 model calls, P1–P7 still PASS). Still open (recorded, not fixed): giveaway prize likely "Claude Pro" running joke missed; consistency resolution shown as pointer only; opener/MC roles slightly scrambled; no short top summary for a 16k-word record.
+- **E2d P8 PASS** (18 S / 2 P / 0 U / 0 N/A). Resumed chapters 11–13 indistinguishable from checkpointed ones. Reviewer: "useful for CCA-F preparation … a reliable index into the video and a checklist of what to verify against current docs".
+
+## Final status (2026-10-16 ~10:20 ET)
+**All evaluations pass the approved bar (P1–P8):** E1b (pilot), E2/E2b/E2c/E2d (full 12.6 h CCA-F, auto-captions), E3b/E3c/E3d/E3e (2 h CLE-AI meetup, local parakeet ASR from safety copies, full pipeline).
+
+Open items (recorded, not blocking):
+- Course Map theme tagging still misses ch. 7 when the theme is phrased "spec- and plan-driven development" (F9 (m) matches term "plan mode" only); "discrepancy" vs "partly contradicted" placement can land on the wrong statement (ch. 5 hooks vs ch. 7).
+- Hedges true only within one passage ("not shown in this passage") read as course gaps — needs cross-chapter awareness (ledger is per-chapter only).
+- Meetup: giveaway prize ("Claude Pro" running joke) not identified; consistency resolutions rendered as pointers only; MC/opener roles; no short top summary.
+- Feature: CLI flags for user-supplied event metadata (`--event-date`, `--description-file`, `--source-url`) instead of editing source_meta.json.
+- longform_state.json per-passage `citation_audit` not updated by reaudit (bookkeeping).
