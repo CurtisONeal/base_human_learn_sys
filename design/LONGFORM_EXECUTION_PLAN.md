@@ -126,7 +126,7 @@ the hard stop.
 |---|---|---|---|
 | Safety copies | in progress | — | `~/Movies/CLE-AI-26_09_safety_copies/`, SHA256SUMS.txt |
 | WP-0 | in progress (agent, worktree) | | started 2026-10-15 ~22:00 ET |
-| WP-1 | in progress (agent, worktree) | | started 2026-10-15 ~22:00 ET |
+| WP-1 | **done** — merged | 11775c3 | 15 new tests; 320 pass. Note for WP-6b: `media` still calls whole-file `to_wav()` — must become windowed |
 | WP-6a | in progress (agent, worktree) | | started 2026-10-15 ~22:00 ET |
 | WP-2 | pending | | |
 | WP-4 | pending | | |
