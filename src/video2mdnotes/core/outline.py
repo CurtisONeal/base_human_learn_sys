@@ -192,7 +192,17 @@ def parse_outline(text: str) -> Tuple[Optional[List[OutlineEntry]], str]:
         speaker = speaker.strip() if isinstance(speaker, str) and speaker.strip() else None
         if speaker and speaker.lower() in ("null", "none", "unknown", "n/a"):
             speaker = None
-        out.append(OutlineEntry(start_s=t, title=title.strip(), speaker=speaker))
+        role = item.get("role")
+        role = role.strip().lower() if isinstance(role, str) and role.strip() else None
+        if role in ("null", "none", "unknown", "n/a"):
+            role = None
+        raw_var = item.get("speaker_variants", item.get("variants")) or []
+        if isinstance(raw_var, str):
+            raw_var = [raw_var]
+        variants = [" ".join(str(v).split()) for v in raw_var
+                    if isinstance(v, str) and v.strip() and v.strip() != speaker]
+        out.append(OutlineEntry(start_s=t, title=title.strip(), speaker=speaker,
+                                role=role, speaker_variants=variants))
     return out, ""
 
 

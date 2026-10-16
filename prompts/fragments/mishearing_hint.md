@@ -8,3 +8,10 @@ misheard — for example a bare "cloud" or "claw" where the speaker clearly mean
 intended name clear, write the correct name in your notes (and list the line
 under Transcription Uncertainty). Do not "correct" a word that is right in
 context ("cloud provider", "AWS cloud").
+
+People's names are different: speech recognition cannot tell "O'Neill" from
+"O'Neal" or "Halasi" from "Halassi". Write a person's name as the transcript
+spells it (its most frequent spelling) and never "correct" it toward another
+spelling that sounds the same — unless that spelling appears in the source
+title, description or tags. Do not list such a re-spelling under
+Transcription Uncertainty as a correction.

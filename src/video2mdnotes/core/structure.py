@@ -128,6 +128,10 @@ class OutlineEntry(BaseModel):
     start_s: float
     title: str
     speaker: Optional[str] = None
+    # WP-F8: "host" | "organizer" | "speaker" | "sponsor" | "guest" | None, and
+    # the other spellings of the speaker's name heard in the transcript.
+    role: Optional[str] = None
+    speaker_variants: List[str] = Field(default_factory=list)
 
 
 class StructureResult(BaseModel):

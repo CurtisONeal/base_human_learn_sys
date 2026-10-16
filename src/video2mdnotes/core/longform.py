@@ -48,7 +48,8 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from video2mdnotes.config import BASE_DIR
 from video2mdnotes.core import (
-    citations, domains, notes_format, outline as outline_mod, quality, spoken_dates, summarizer,
+    citations, consistency, domains, names, notes_format, outline as outline_mod, quality,
+    spoken_dates, summarizer,
 )
 from video2mdnotes.core.chunking import DEFAULT_MAX_WORDS
 from video2mdnotes.core.costs import BudgetExhausted, current_run_id
@@ -231,6 +232,7 @@ class Plan:
     selected: List[List[Passage]]    # after --only
     structure_mode: str = "auto"
     outline: Optional[outline_mod.OutlineResult] = None   # None: rung not tried
+    raw_segments: List[Segment] = field(default_factory=list)   # 1:1 with `segments`
 
     @property
     def passages(self) -> List[Passage]:
@@ -355,7 +357,7 @@ def build_plan(
         structure=structure_res, skeleton=course_skeleton(structure_res, meta),
         profile=domains.longform_profile(meta),
         chapters=chapters, selected=select_chapters(chapters, only),
-        structure_mode=structure, outline=outline_res,
+        structure_mode=structure, outline=outline_res, raw_segments=list(segments),
     )
 
 
@@ -728,8 +730,17 @@ def passage_caption_lines(plan: Plan, p: Passage) -> List[Tuple[float, str]]:
     return [(s.start, " ".join(s.text.split())) for s in plan.segments[a:b]]
 
 
+def passage_raw_lines(plan: Plan, p: Passage) -> List[Tuple[float, str]]:
+    """The same lines from the RAW transcript (fuzzy audit only, WP-F8)."""
+    a, b = p.span
+    if len(plan.raw_segments) != len(plan.segments):
+        return []
+    return [(s.start, " ".join(s.text.split())) for s in plan.raw_segments[a:b]]
+
+
 def audit_passage_notes(plan: Plan, p: Passage, notes: str) -> Tuple[str, List[dict]]:
-    audited, entries = citations.audit_notes(notes, passage_caption_lines(plan, p))
+    audited, entries = citations.audit_notes(notes, passage_caption_lines(plan, p),
+                                             passage_raw_lines(plan, p))
     for e in entries:
         e["passage"] = p.key
     return audited, entries
@@ -1066,9 +1077,148 @@ def merge_themes(candidates: Sequence[str], limit: int = MAX_THEMES,
     return [render_theme(c["text"], c["chapters"]) for c in ranked]
 
 
-def _themes_input(plan: Plan, candidates: Sequence[str]) -> str:
+# Theme tagging (WP-F8): E2b's themes named topics ("hooks", "subagents") but
+# cited only some of the chapters that teach them — the themes call saw
+# chapter TITLES only. It now gets a short deterministic topic list per chapter
+# (vocabulary terms + sub-headings of that chapter's notes), and a post-check
+# adds every chapter whose topic list holds a term the theme names.
+
+MAX_TOPICS = 8
+_TOPIC_BULLET = re.compile(
+    r"^\s*[-*+]\s+(?:`([^`]+)`|\*\*([^*]+)\*\*|([^:—–\[`*]{2,60}?)(?:\s*:|\s+[-—–])\s)")
+_STANDARD_HEADINGS = None
+
+
+def _standard_headings() -> set:
+    global _STANDARD_HEADINGS
+    if _STANDARD_HEADINGS is None:
+        names = {h for prof in domains.LONGFORM_SECTIONS.values() for h, _ in prof}
+        _STANDARD_HEADINGS = {_norm(h) for h in names} | {"part"}
+    return _STANDARD_HEADINGS
+
+
+def _clean_topic(text: str) -> str:
+    text = re.sub(r"\([^)]*\)", " ", text or "")
+    text = _CITE_RE.sub(" ", text)
+    return " ".join(text.strip(" -*_`'\"").split())
+
+
+def chapter_topics(ch: List[Passage], notes_by_key: Dict[str, str],
+                   limit: int = MAX_TOPICS) -> List[str]:
+    """Key topics of one chapter, deterministic: the vocabulary terms of its
+    notes (in order), then its non-standard sub-headings; at most `limit`."""
+    out: List[str] = []
+    seen = set()
+
+    def add(t: str):
+        t = _clean_topic(t)
+        key = _norm(t)
+        if t and len(key) >= 3 and len(t.split()) <= 6 and key not in seen:
+            seen.add(key)
+            out.append(t)
+
+    for p in ch:
+        md = notes_by_key.get(p.key, "")
+        body = section_body(md, "Key Concepts") or ""
+        for line in body.splitlines():
+            m = _TOPIC_BULLET.match(line)
+            if m:
+                add(next(g for g in m.groups() if g))
+    for p in ch:
+        for _, _, text in _headings(notes_by_key.get(p.key, "")):
+            if not any(_norm(text).startswith(s) for s in _standard_headings()):
+                add(text)
+    return out[:limit]
+
+
+def _topic_toks(topic: str) -> Tuple[str, ...]:
+    return tuple(citations.tokens(topic))
+
+
+def _contains(seq: Sequence[str], sub: Sequence[str]) -> bool:
+    n = len(sub)
+    return any(tuple(seq[i:i + n]) == tuple(sub) for i in range(len(seq) - n + 1))
+
+
+GENERIC_TOPIC_DF = 0.4
+
+
+def generic_topic_words(chapter_texts: Dict[str, str], max_df: float = GENERIC_TOPIC_DF) -> set:
+    """Words said in the notes of more than `max_df` of the chapters ("agent"
+    in an agents course): as a ONE-word topic they name nothing specific."""
+    if len(chapter_texts) < 3:
+        return set()
+    df: Dict[str, int] = {}
+    for text in chapter_texts.values():
+        for tok in set(citations.tokens(text)):
+            df[tok] = df.get(tok, 0) + 1
+    n = len(chapter_texts)
+    return {t for t, k in df.items() if k / n > max_df}
+
+
+def chapter_topic_lists(plan: Plan, notes_by_key: Dict[str, str]
+                        ) -> Tuple[Dict[str, List[str]], List[str]]:
+    """({chapter label: key topics}, one-word topics dropped as generic). The
+    same lists go to the themes call and to the tagging post-check."""
+    raw = {_chapter_label(ch): chapter_topics(ch, notes_by_key, limit=3 * MAX_TOPICS)
+           for ch in plan.selected}
+    generic = generic_topic_words({
+        _chapter_label(ch): "\n".join(chapter_body(notes_by_key[p.key], 3) for p in ch)
+        for ch in plan.selected})
+    dropped: List[str] = []
+    topics: Dict[str, List[str]] = {}
+    for label, ts in raw.items():
+        keep = []
+        for t in ts:
+            tt = _topic_toks(t)
+            if len(tt) == 1 and tt[0] in generic:
+                if t not in dropped:
+                    dropped.append(t)
+                continue
+            keep.append(t)
+        topics[label] = keep[:MAX_TOPICS]
+    return topics, dropped
+
+
+def tag_theme_chapters(themes: Sequence[str], topics: Dict[str, List[str]],
+                       generic: Optional[set] = None) -> Tuple[List[str], List[dict]]:
+    """Every chapter whose topic list holds a term a theme names is tagged on
+    that theme. Returns (themes, additions log). Tags are only ever added.
+    A one-word topic in `generic` (said across most chapters) is not a term."""
+    generic = generic or set()
+    out, log = [], []
+    for theme in themes:
+        text, chs = split_theme(theme)
+        toks = citations.tokens(text)
+        have = list(chs)
+        for label, tlist in topics.items():
+            if label in have or label == "-":
+                continue
+            for t in tlist:
+                tt = _topic_toks(t)
+                meaningful = [x for x in tt if x not in citations.STOPWORDS]
+                if not meaningful or (len(tt) == 1 and (len(tt[0]) < 4 or tt[0] in generic)):
+                    continue
+                if _contains(toks, tt):
+                    have.append(label)
+                    log.append({"theme": text, "chapter": label, "topic": t})
+                    break
+        out.append(render_theme(text, have) if have != list(chs) else theme)
+    return out, log
+
+
+def _themes_input(plan: Plan, candidates: Sequence[str],
+                  topics: Optional[Dict[str, List[str]]] = None) -> str:
     out = ["Chapters (for reference only):"]
-    out += [f"- {_chapter_label(ch)}: {ch[0].title}" for ch in plan.selected]
+    for ch in plan.selected:
+        label = _chapter_label(ch)
+        line = f"- {label}: {ch[0].title}"
+        if topics and topics.get(label):
+            line += " — key topics: " + "; ".join(topics[label])
+        out.append(line)
+    if topics:
+        out += ["", "Tag a theme with EVERY chapter whose key topics include what the "
+                "theme names, not only the chapters of the candidates."]
     out += ["", f"Candidate themes from the batches ({len(candidates)}):"]
     out += [f"- {c}" for c in candidates]
     return "\n".join(out) + "\n"
@@ -1076,6 +1226,7 @@ def _themes_input(plan: Plan, candidates: Sequence[str]) -> str:
 
 def consolidate_themes(plan: Plan, candidates: List[str], state: State, complete: CompleteFn,
                        resume: bool = True, progress: Progress = print,
+                       topics: Optional[Dict[str, List[str]]] = None,
                        ) -> Tuple[List[str], Optional[str], int, Optional[str]]:
     """(themes, model, calls made, fallback reason). One model call over the
     candidate bullets only; a failed, empty or chatty reply falls back to
@@ -1095,7 +1246,7 @@ def consolidate_themes(plan: Plan, candidates: List[str], state: State, complete
         progress(f"  run  course map themes ({len(candidates)} candidates)")
         try:
             reply, model = complete(THEMES_PROMPT.read_text(encoding="utf-8"),
-                                    _themes_input(plan, candidates))
+                                    _themes_input(plan, candidates, topics))
             calls = 1
             _atomic_write(cache, reply)
             state.update("course_map", "themes", candidates=list(candidates), model=model,
@@ -1155,11 +1306,19 @@ def build_course_map(plan: Plan, notes_by_key: Dict[str, str], state: State,
             if not gist:
                 gist = _deterministic_gist([notes_by_key[p.key] for p in ch])
             gist = notes_format.sanitize_cell(gist)
-            rows.append(f"| {label} | {ch[0].title} | [{_chapter_range(ch)}] | {gist} |")
+            rows.append(f"| {label} | {notes_format.sanitize_cell(display_title(plan, ch[0].title))} "
+                        f"| [{_chapter_range(ch)}] | {gist} |")
         candidates.extend(t for t in batch_themes if t not in candidates)
 
+    topics, generic_dropped = chapter_topic_lists(plan, notes_by_key)
     themes, theme_model, theme_calls, theme_fallback = consolidate_themes(
-        plan, candidates, state, complete, resume=resume, progress=progress)
+        plan, candidates, state, complete, resume=resume, progress=progress, topics=topics)
+    themes, tags_added = tag_theme_chapters(themes, topics)
+    with state.lock:
+        state.data["course_map"]["theme_tags"] = {
+            "topics": topics, "added": tags_added,
+            "generic_one_word_topics_dropped": generic_dropped}
+        state.save()
     calls += theme_calls
     if theme_model:
         models.append(theme_model)
@@ -1179,9 +1338,40 @@ def build_course_map(plan: Plan, notes_by_key: Dict[str, str], state: State,
 # --- assembly -----------------------------------------------------------------------
 
 
+def outline_speakers(plan: Plan) -> List[Tuple[str, List[str]]]:
+    """(speaker, spelling variants) of the outline entries, in order, unique."""
+    out: List[Tuple[str, List[str]]] = []
+    entries = plan.outline.entries if plan.outline is not None and plan.outline.entries else []
+    for e in entries:
+        if e.speaker and all(e.speaker != s for s, _ in out):
+            out.append((e.speaker, list(e.speaker_variants or [])))
+    return out
+
+
+def _asr_names(plan: Plan) -> bool:
+    """Names in this source rest on machine transcription (WP-F8)."""
+    return names.is_machine(plan.provenance)
+
+
+def display_title(plan: Plan, title: str) -> str:
+    """The chapter title as shown in headings and the Course Map: an outline
+    speaker name the metadata does not confirm is hedged when the transcript
+    is machine-made. Passage keys keep the plain title."""
+    if not _asr_names(plan):
+        return title
+    speakers = [s for s, _ in outline_speakers(plan)]
+    if not speakers:
+        return title
+    return names.hedge_title(title, speakers, names.metadata_words(plan.meta))
+
+
 def _merge_uncertainty(plan: Plan, notes_by_key: Dict[str, str]) -> Tuple[str, dict]:
     items: Dict[Tuple[str, str], dict] = {}
     omitted = known = 0
+    asr = _asr_names(plan)
+    vocab = names.TranscriptVocab.build(plan.segments) if asr else None
+    meta_words = names.metadata_words(plan.meta)
+    respellings: List[Tuple[str, str]] = []
     for p in plan.passages:
         parsed = quality.parse_uncertainty_section(notes_by_key[p.key])
         if parsed is None:
@@ -1192,6 +1382,12 @@ def _merge_uncertainty(plan: Plan, notes_by_key: Dict[str, str]) -> Tuple[str, d
             # corrections.json; repeating it here would re-print the mishearing.
             if quality.correct_notes(it["heard"], plan.glossary)[1]:
                 known += 1
+                continue
+            # WP-F8: "Curtis O'Neill -> O'Neal" is not a correction the audio
+            # supports; it moves to the names subsection, unapplied.
+            if asr and names.is_name_respelling(it["heard"], it["probable"], vocab, meta_words):
+                if (it["heard"], it["probable"]) not in respellings:
+                    respellings.append((it["heard"], it["probable"]))
                 continue
             key = (it["heard"].lower(), it["probable"].lower())
             if key not in items or quality.parse_ts(it["timestamp"]) < quality.parse_ts(items[key]["timestamp"]):
@@ -1213,7 +1409,21 @@ def _merge_uncertainty(plan: Plan, notes_by_key: Dict[str, str]) -> Tuple[str, d
         notes.append(f"{omitted} passage(s) returned no {UNCERTAINTY} section")
     if notes:
         out += ["", "> " + "; ".join(notes) + "."]
-    return "\n".join(out) + "\n", {"rows": len(rows), "glossary_known": known, "omitted": omitted}
+    name_rows: List[names.NameRow] = []
+    if asr:
+        name_rows = names.names_rows(
+            speakers=outline_speakers(plan),
+            notes=[chapter_body(notes_by_key[p.key], 3) for p in plan.passages],
+            respellings=respellings, vocab=vocab, meta_words=meta_words)
+        block = names.render_names(name_rows, plan.provenance_label)
+        if block:
+            out += ["", block.rstrip("\n")]
+    return "\n".join(out) + "\n", {
+        "rows": len(rows), "glossary_known": known, "omitted": omitted,
+        "names_unverified": [{"name": r.name, "spellings": r.spellings, "basis": r.source}
+                             for r in name_rows],
+        "name_respellings_not_applied": [{"heard": h, "probable": p} for h, p in respellings],
+    }
 
 
 MODEL_KNOWLEDGE = "per model knowledge (cutoff uncertain)"
@@ -1258,7 +1468,8 @@ def _merge_fact_checked(plan: Plan, notes_by_key: Dict[str, str]) -> str:
                 bodies.append(shift_headings(body, 4 - (secs[0][1] if secs else 4)).strip())
         if bodies:
             any_body = True
-            out += [f"### {ch[0].title} [{_chapter_range(ch)}]", "", "\n\n".join(bodies), ""]
+            out += [f"### {display_title(plan, ch[0].title)} [{_chapter_range(ch)}]", "",
+                    "\n\n".join(bodies), ""]
     if not any_body:
         out.append("- None")
     return "\n".join(out).rstrip() + "\n"
@@ -1284,6 +1495,9 @@ def _audit_line(audit: Sequence[dict]) -> Optional[str]:
         parts.append(f"{counts['unverified']} marked _(unverified citation)_")
     if counts.get("normalized"):
         parts.append(f"{counts['normalized']} with model commentary collapsed to the valid citation")
+    if counts.get("unmarked"):
+        parts.append(f"{counts['unmarked']} earlier _(unverified citation)_ mark(s) cleared "
+                     "by fuzzy caption matching")
     if not parts:
         return None
     return "> Citation audit: " + "; ".join(parts) + f" — see `{citations.AUDIT_FILENAME}`."
@@ -1338,11 +1552,13 @@ def assemble(plan: Plan, notes_by_key: Dict[str, str], course_map_md: str,
     partial = len(plan.selected) < len(plan.chapters)
     # Recording lag (WP-F7): an INFERENCE from dates spoken in the transcript.
     # as_of stays the published date (P4/P5 unchanged); this only warns.
+    # WP-F8: relative anchors ("In May of 26 ... five months ago") first, and
+    # also when the publish date is unknown (reference = the captured date).
     as_of = notes_format.resolve_as_of(plan.meta)
-    recorded = spoken_dates.estimate_recording(plan.segments, as_of.date, as_of.basis)
+    recorded = spoken_dates.estimate_event(plan.segments, as_of.date, as_of.basis)
     blocks = [_source_block(plan, models, partial, audit, recorded), course_map_md]
     for ch in plan.selected:
-        blocks.append(f"## {ch[0].title} [{_chapter_range(ch)}]\n")
+        blocks.append(f"## {display_title(plan, ch[0].title)} [{_chapter_range(ch)}]\n")
         if len(ch) == 1:
             blocks.append(chapter_body(notes_by_key[ch[0].key], 3))
         else:
@@ -1452,6 +1668,56 @@ def _append_corrections(out_dir: Path, entries: List[dict]) -> None:
     _atomic_write(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
 
 
+def consistency_sections(plan: Plan, notes_by_key: Dict[str, str]) -> List[consistency.Section]:
+    return [consistency.Section(_chapter_label(ch), ch[0].title, _chapter_range(ch),
+                                [(p.key, notes_by_key[p.key]) for p in ch])
+            for ch in plan.selected]
+
+
+def run_consistency(plan: Plan, notes_by_key: Dict[str, str], state: State,
+                    complete: Optional[CompleteFn], *, resume: bool = True,
+                    progress: Progress = print,
+                    ) -> Tuple[Dict[str, str], consistency.ConsistencyResult]:
+    """The consistency step: (annotated notes_by_key, result). Logged to the
+    state file under "consistency"; a failed call is a warning there."""
+    sections = consistency_sections(plan, notes_by_key)
+    if len(sections) > 1:
+        progress(f"  run  consistency check ({len(sections)} sections)")
+    res = consistency.check(sections, notes_by_key, plan.out_dir, complete, resume=resume)
+    if res.status == "failed":
+        progress(f"  WARNING consistency check skipped: {res.reason}")
+    elif res.cached:
+        progress("  skip consistency call (cached)")
+    with state.lock:
+        state.data["consistency"] = {**res.state_record(), "finished_at": _now()}
+        state.save()
+    return res.notes_by_key, res
+
+
+# Notes-own arithmetic must carry "Check:" (WP-F8). Deterministic lint only:
+# findings are logged in the state file, the notes are not rewritten.
+_ARITH_RE = re.compile(
+    r"\d[\d,.]*\s*(?:[×x*/÷+]|−|-(?=\s*\d))\s*\d[\d,.]*\s*(?:=|≈|is about|is ~)|"
+    r"(?<![\w-])=\s*~?\d", re.I)
+
+
+def check_rule_findings(notes: str) -> List[str]:
+    """Bullets that show a computation (`2 × 12 = 24`, `= 71.7%`) without a
+    `Check:` label."""
+    out = []
+    fenced = False
+    for line in notes.split("\n"):
+        if _FENCE_RE.match(line):
+            fenced = not fenced
+            continue
+        s = line.strip()
+        if fenced or not s.startswith(("-", "*", "|")):
+            continue
+        if _ARITH_RE.search(_CITE_RE.sub(" ", s)) and "check:" not in s.lower():
+            out.append(s[:160])
+    return out
+
+
 # --- entry points ---------------------------------------------------------------------
 
 
@@ -1500,7 +1766,8 @@ def describe_plan(plan: Plan, state: Optional[State] = None) -> str:
         f"Estimated model calls: {passage_calls} passage + {map_calls} course map = "
         f"{passage_calls + map_calls}"
         + (" (+1 outline)" if plan.outline is not None and plan.outline.entries is None
-           and not plan.outline.cached and not plan.outline.called else ""),
+           and not plan.outline.cached and not plan.outline.called else "")
+        + (" (+1 consistency check unless cached)" if len(plan.selected) > 1 else ""),
         "",
         plan.skeleton,
     ]
@@ -1550,6 +1817,13 @@ def run_longform(
         plan, notes_by_key, state, complete, resume=resume, progress=progress)
     models += map_models
 
+    # Cross-section consistency (WP-F8): one call over extracted statements;
+    # annotations only, on an in-memory copy (checkpoints stay as written).
+    notes_by_key, cons = run_consistency(plan, notes_by_key, state, complete,
+                                         resume=resume, progress=progress)
+    if cons.model and cons.called:
+        models.append(cons.model)
+
     run_id = state.data.get("run_id") or current_run_id()
     audit = load_citation_audit(plan.out_dir, [p.key for p in plan.passages])
     final, info = assemble(plan, notes_by_key, course_map_md, models, run_id, audit=audit)
@@ -1569,6 +1843,9 @@ def run_longform(
             "passages": [p.key for p in plan.passages], "notes_corrections": len(logged),
             "lint_residual": len(residual), "course_map_calls": map_calls,
             "course_map_fallbacks": map_fallbacks, **info,
+            "consistency": {"status": cons.status, "applied": sum(
+                1 for e in cons.log if e.get("applied")), "reason": cons.reason},
+            "check_rule_findings": check_rule_findings(fixed),
         }
         state.save()
     progress(f"Long-form notes: {summary_path} ({len(fixed.split()):,} words; "

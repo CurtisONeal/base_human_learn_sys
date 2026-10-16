@@ -699,7 +699,39 @@ is moved there; one whose strong terms are never said is marked
 entries that changed nothing). `longform.reaudit_chunks(run_dir)` re-audits
 existing `chunk_summaries/` without calling a model. Ledger entries carry
 `status: observed|expected|superseded`, so a demo's expected outcome is not
-handed to the next part as fact.
+handed to the next part as fact. Before a unit is marked unverified, its terms
+are also matched fuzzily (edit distance, crude stems, compound splits —
+`.gitignore` ~ "get ignore") against the corrected and the raw caption lines
+at the citation; a match leaves it unmarked (`citation:fuzzy_ok`) and clears
+an older mark (`citation:unmarked`). Fuzzy matching never retargets.
+
+**Cross-section consistency (one model call).** Sections are summarized
+independently, so a later one can contradict an earlier one (E3b: "winner
+announced Wednesday" in chapter 1, the draw at the event in chapter 6).
+`core/consistency.py` extracts the cited outcome / number / named-person
+statements, asks one subscription-chain call for contradicting pairs, caches
+the reply in `consistency.json`, and only annotates: the superseded statement
+gets `_(superseded: see [t] in ch. N "Title")_` (a Time-Sensitive row is also
+prefixed `(superseded)`); a figure quoted differently gets
+`_(discrepancy: …)_` on the later statement. Logged under `consistency` in
+`longform_state.json`; skipped for one section; a failed call is a warning.
+
+**Machine-transcribed names.** With `auto-captions` / `asr:*` provenance, an
+outline speaker in a heading or Course Map row is shown as
+`Title — Name (ASR spelling)` unless the metadata names them, and every
+ASR-only name (with spelling counts from the transcript) is listed under
+`### Names (spelling unverified)` in Transcription Uncertainty. A passage's
+re-spelling of a person's name to a sound-alike ("O'Neill" -> "O'Neal") is
+not applied unless the metadata has that spelling.
+
+**Event date inference.** `core/spoken_dates.py` also resolves relative
+anchors ("In May of 26 … five months ago") into `recorded_estimate` and a
+`> Event date (inference)` line under the title — also when the publish date
+is unknown. `as_of` never changes.
+
+**Theme tagging.** The themes call gets each chapter's key topics
+(vocabulary terms + sub-headings); a deterministic post-check then tags every
+chapter whose topic list holds a term the theme names.
 
 **Assembly never re-summarizes.** The final
 `summaries/<name>.summary.md` is frontmatter (`published`, `as_of`,

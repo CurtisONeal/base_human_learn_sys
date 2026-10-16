@@ -64,6 +64,19 @@ The passage transcript is right there, so the check is mechanical:
      citation but no unique better region exists: logged with
      ``changed: false`` for a human; the notes are NOT changed.
 
+   * **fuzzy ok** (``citation:fuzzy_ok``, WP-F8) — before a unit is marked
+     unverified, its terms are matched FUZZILY against the caption lines within
+     ±``WINDOW_S`` of the citation, in the corrected transcript and (when
+     given) the raw one: normalised edit distance ≤ ``FUZZY_MAX_DIST``
+     ("get" ~ "git"), stem/prefix matching ("use" ~ "usage"), and compound
+     tokens split against adjacent caption words (``.gitignore`` ~ "get
+     ignore"). E2b marked two correct citations unverified because captions
+     mis-heard the terms. When at least ``FUZZY_MIN_HITS`` content words match
+     and the share reaches ``FUZZY_OK_SHARE`` (``FUZZY_OK_SHARE_STRONG`` when a
+     strong term matched too), the unit is NOT marked; a mark from an earlier
+     audit is removed (logged ``citation:unmarked``). Fuzzy matching is used
+     for this decision only — never to retarget.
+
 Not audited: Transcription Uncertainty and Fact-Checked Notes (see
 ``SKIP_SECTIONS``), code fences, and lines that are neither bullets nor table
 rows. Generic bullets (no strong term) are never retargeted or marked.
@@ -91,6 +104,16 @@ ORIGIN_S = 5.0
 RARE_DF = 2            # a content word said on <= 2 caption lines is "rare"
 CLUSTER_GAP_S = 60.0
 UNVERIFIED_MARK = "_(unverified citation)_"
+FUZZY_MAX_DIST = 0.34      # normalised edit distance: "get" ~ "git" (1/3)
+FUZZY_MIN_HITS = 2
+FUZZY_OK_SHARE = 0.4
+FUZZY_OK_SHARE_STRONG = 0.3
+# Words the notes use ABOUT a claim ("(speaker's statement)", "reported"):
+# never evidence for or against a citation.
+META_WORDS = frozenset("""
+statement claim claims reported reports report mention mentions mentioned
+speaker speakers note notes cited citation unverified suggestion
+""".split())
 AUDIT_FILENAME = "citation_audit.json"
 
 # Sections whose citations are not about the claim in the cell text.
@@ -186,6 +209,7 @@ class Change:
     coverage_cited: float
     coverage_new: Optional[float] = None
     changed: bool = True
+    evidence: Optional[dict] = None
 
     def as_dict(self) -> dict:
         d = {
@@ -196,6 +220,8 @@ class Change:
         }
         if self.coverage_new is not None:
             d["coverage_new"] = round(self.coverage_new, 2)
+        if self.evidence is not None:
+            d["fuzzy"] = self.evidence
         return d
 
 
@@ -367,10 +393,74 @@ def extract_terms(text: str) -> List[Term]:
 # --- the passage index -----------------------------------------------------------
 
 
-class PassageIndex:
-    """Caption lines of ONE passage: times and token sets, for window lookups."""
+def edit_distance(a: str, b: str) -> int:
+    """Levenshtein distance (small strings: tokens)."""
+    if a == b:
+        return 0
+    if len(a) < len(b):
+        a, b = b, a
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
 
-    def __init__(self, lines: Sequence[Tuple[float, str]]):
+
+_ROOT_SUFFIXES = ("ation", "ment", "ness", "ing", "age", "ers", "er", "ed", "es", "s", "e", "y")
+
+
+def _root(tok: str) -> str:
+    """A crude stem for fuzzy matching: "usage" -> "us", "use" -> "us"."""
+    for suf in _ROOT_SUFFIXES:
+        if tok.endswith(suf) and len(tok) - len(suf) >= 2:
+            return tok[: -len(suf)]
+    return tok
+
+
+def fuzzy_token_match(a: str, b: str) -> bool:
+    """Same word as heard by a caption engine: equal; the same crude stem
+    ("use" ~ "usage"); one a prefix of the other (shorter ≥ 3 letters and ≥
+    half the longer); or normalised edit distance ≤ FUZZY_MAX_DIST ("get" ~
+    "git"). Tokens under 3 characters only match exactly."""
+    if a == b:
+        return True
+    if min(len(a), len(b)) < 3 or a.isdigit() or b.isdigit():
+        return False
+    if _root(a) == _root(b):
+        return True
+    short, long_ = sorted((a, b), key=len)
+    if long_.startswith(short) and len(short) * 2 >= len(long_):
+        return True
+    return edit_distance(a, b) / max(len(a), len(b)) <= FUZZY_MAX_DIST
+
+
+def _fuzzy_in(tok: str, window: Sequence[str]) -> bool:
+    """`tok` fuzzily among the window's tokens, or (a compound, ≥ 6 letters)
+    fuzzily equal to two or three adjacent window tokens written together
+    (".gitignore" -> "gitignore" ~ "get" + "ignore")."""
+    if any(fuzzy_token_match(tok, w) for w in window):
+        return True
+    if len(tok) < 6:
+        return False
+    for n in (2, 3):
+        for k in range(len(window) - n + 1):
+            glued = "".join(window[k:k + n])
+            if abs(len(glued) - len(tok)) <= 2 and fuzzy_token_match(tok, glued):
+                return True
+    return False
+
+
+class PassageIndex:
+    """Caption lines of ONE passage: times and token sets, for window lookups.
+
+    `alt_lines` (optional): the same passage in another version — the RAW
+    transcript when `lines` are corrected — used only by fuzzy matching."""
+
+    def __init__(self, lines: Sequence[Tuple[float, str]],
+                 alt_lines: Optional[Sequence[Tuple[float, str]]] = None):
+        self.alt = [(float(t), tokens(x)) for t, x in (alt_lines or [])]
         self.times = [float(t) for t, _ in lines]
         self.texts = [x for _, x in lines]
         self.toks = [set(tokens(x)) for x in self.texts]
@@ -410,6 +500,15 @@ class PassageIndex:
 
     def lines_in(self, lo: float, hi: float) -> range:
         return range(bisect.bisect_left(self.times, lo), bisect.bisect_right(self.times, hi))
+
+    def window_token_runs(self, lo: float, hi: float) -> List[List[str]]:
+        """Token sequences of the window [lo, hi]: the lines joined in order,
+        once from the main lines and once from the alt (raw) lines."""
+        main: List[str] = []
+        for i in self.lines_in(lo, hi):
+            main += tokens(self.texts[i])
+        alt = [tok for t, toks in self.alt if lo <= t <= hi for tok in toks]
+        return [run for run in (main, alt) if run]
 
 
 def _weigh(terms: List[Term], index: PassageIndex) -> Dict[int, List[float]]:
@@ -543,6 +642,40 @@ class _Scorer:
         return _Score(strong, content, overall, present)
 
 
+def fuzzy_support(terms: List[Term], unit: Unit, index: PassageIndex) -> Optional[dict]:
+    """Fuzzy evidence that the unit's claim is said at its citation, or None.
+
+    Every strong term fuzzily present in a cited window → supported (the
+    exact audit never marks a unit whose strong terms are all said there).
+    Otherwise at least FUZZY_MIN_HITS content words must match, covering
+    FUZZY_OK_SHARE of them (FUZZY_OK_SHARE_STRONG when a strong term matched).
+    """
+    strong = [t for t in terms if t.strong]
+    content = [t for t in terms if not t.strong and t.toks[0] not in META_WORDS]
+    best: Optional[dict] = None
+    for a, b, _ in unit.cites:
+        runs = index.window_token_runs(a - WINDOW_S, b + WINDOW_S)
+        if not runs:
+            continue
+
+        def present(toks: Sequence[str]) -> bool:
+            glued = "".join(toks)
+            return any(_fuzzy_in(glued, run) or all(_fuzzy_in(t, run) for t in toks)
+                       for run in runs)
+
+        s_hit = [t.text for t in strong if present(t.toks)]
+        c_hit = [t.text for t in content if present(t.toks)]
+        share = len(c_hit) / len(content) if content else 0.0
+        ok = bool(strong) and len(s_hit) == len(strong)
+        ok = ok or (len(c_hit) >= FUZZY_MIN_HITS and share >= (
+            FUZZY_OK_SHARE_STRONG if s_hit else FUZZY_OK_SHARE))
+        if ok and (best is None or share > best["share"]):
+            best = {"strong_matched": s_hit, "content_matched": c_hit,
+                    "content_total": len(content), "share": share,
+                    "window": f"{hms(max(0.0, a - WINDOW_S))}–{hms(b + WINDOW_S)}"}
+    return best
+
+
 def judge(unit: Unit, index: PassageIndex) -> Optional[Change]:
     """The audit verdict for one unit, or None when its citation is fine (or the
     unit is too generic to judge)."""
@@ -563,6 +696,12 @@ def judge(unit: Unit, index: PassageIndex) -> Optional[Change]:
     if not sc.strong_w:
         # None of its strong terms is ever said in this passage.
         if cited.content < UNVERIFIED_MAX_COVERAGE:
+            fz = fuzzy_support(terms, unit, index)
+            if fz is not None:
+                ch = Change("citation:fuzzy_ok", unit.line, unit.section, unit.text, orig,
+                            None, show, cited.overall, round(fz["share"], 2), changed=False)
+                ch.evidence = fz
+                return ch
             return Change("citation:unverified", unit.line, unit.section, unit.text, orig,
                           None, show, cited.overall)
         return None
@@ -632,12 +771,20 @@ def _mark_unverified(line: str, kind: str) -> str:
     return line.rstrip() + " " + UNVERIFIED_MARK
 
 
-def audit_notes(notes: str, caption_lines: Sequence[Tuple[float, str]]) -> Tuple[str, List[dict]]:
+def _unmark(line: str) -> str:
+    return line.replace(" " + UNVERIFIED_MARK, "").replace(UNVERIFIED_MARK, "")
+
+
+def audit_notes(notes: str, caption_lines: Sequence[Tuple[float, str]],
+                raw_lines: Optional[Sequence[Tuple[float, str]]] = None,
+                ) -> Tuple[str, List[dict]]:
     """(audited notes, log entries). `caption_lines` = (start seconds, text) of
-    the passage's own (corrected) transcript lines — not the overlap tail."""
+    the passage's own (corrected) transcript lines — not the overlap tail.
+    `raw_lines` (optional): the same lines from the raw transcript, used only
+    by the fuzzy check that runs before a unit is marked unverified."""
     if not caption_lines:
         return notes, []
-    index = PassageIndex(caption_lines)
+    index = PassageIndex(caption_lines, raw_lines)
     entries: List[dict] = []
     notes, entries = normalize_citation_commentary(
         notes, caption_validator([t for t, _ in caption_lines]))
@@ -646,6 +793,14 @@ def audit_notes(notes: str, caption_lines: Sequence[Tuple[float, str]]) -> Tuple
     for unit in iter_units(notes):
         ch = judge(unit, index)
         if ch is None:
+            line = lines[unit.line]
+            if UNVERIFIED_MARK in line and any(t.strong for t in extract_terms(unit.text)):
+                # An earlier audit marked it; this one finds the citation fine.
+                lines[unit.line] = _unmark(line)
+                entries.append({"rule": "citation:unmarked", "changed": True,
+                                "original_ts": " ".join(c[2] for c in unit.cites),
+                                "new_ts": None, "claim": unit.text, "section": unit.section,
+                                "notes_line": unit.line + 1, "fuzzy": None})
             continue
         line = lines[unit.line]
         if ch.rule == "citation:retarget":
@@ -656,6 +811,13 @@ def audit_notes(notes: str, caption_lines: Sequence[Tuple[float, str]]) -> Tuple
             if UNVERIFIED_MARK in line:
                 continue
             lines[unit.line] = _mark_unverified(line, unit.kind)
+        elif ch.rule == "citation:fuzzy_ok" and UNVERIFIED_MARK in line:
+            # An earlier (exact-only) audit marked it; the fuzzy match clears it.
+            lines[unit.line] = _unmark(line)
+            entry = ch.as_dict()
+            entry.update(rule="citation:unmarked", changed=True)
+            entries.append(entry)
+            continue
         entries.append(ch.as_dict())
     if n_markers:
         entries.append({"rule": "citation:normalized", "changed": True, "count": n_markers,

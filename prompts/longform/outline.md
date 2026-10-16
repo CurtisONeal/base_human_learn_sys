@@ -19,10 +19,21 @@ Rules:
   introduces the speaker or the speaker introduces themself.
 - `title` is a short descriptive title (at most ~10 words) of what the section
   is about, taken from what is said — never "Section 3".
-- `speaker` is the speaker's name as spoken in the transcript, or null when no
-  name is given. Do not guess names or employers.
+- `speaker` is the name of the person who speaks for MOST of the section, as
+  spoken in the transcript, or null. Do not guess names or employers.
+  - Tell the host / organizer / MC apart from sponsor and guest speakers. A
+    sponsor or guest who speaks for a minute inside the host's welcome does
+    not name the section; when the host is never named, `speaker` is null.
+  - The transcript is machine speech recognition: the same name is often
+    spelled several ways ("Harsha", "Archer"). Use the spelling heard MOST
+    OFTEN in the transcript for `speaker`, and list every other spelling you
+    saw for that person in `speaker_variants`.
+- `role` is one of "host", "organizer", "speaker", "sponsor", "guest", or
+  null — the role of the person named in `speaker`.
 
 Reply with ONLY a JSON array and nothing else, for example:
 
-[{"start": "0:00:00", "title": "Welcome and sponsors", "speaker": null},
- {"start": "0:06:10", "title": "Getting AI agents to production", "speaker": "Jane Doe"}]
+[{"start": "0:00:00", "title": "Welcome and sponsors", "speaker": null, "role": null,
+  "speaker_variants": []},
+ {"start": "0:06:10", "title": "Getting AI agents to production", "speaker": "Jane Doe",
+  "role": "speaker", "speaker_variants": ["Jane Dough"]}]

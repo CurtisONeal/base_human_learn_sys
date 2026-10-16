@@ -13,6 +13,23 @@ Newest first. Format: symptom → cause → fix → how we know.
 
 ---
 
+### Correct citations marked "unverified" because captions misheard the term (E2b, WP-F8)
+- **Symptom:** E2b's notes carried two `_(unverified citation)_` markers on
+  citations the P8 reviewer found correct: `.gitignore` at 6:59:52 (captions:
+  "add a get ignore") and "Opus consumes plan usage" at 10:12:06 (captions:
+  "use opus. It burns up my credits").
+- **Cause:** the audit matched terms exactly. `gitignore` never occurs as
+  spelled, so the unit had no strong term "said anywhere", and the content
+  words that do occur at the cite ("use", "plan") did not match "usage".
+- **Fix:** before marking unverified, `citations.fuzzy_support` matches terms
+  against the corrected AND raw caption lines in the cited window (edit
+  distance ≤ 0.34, crude stems, compound split against adjacent words). A
+  match leaves the unit unmarked (`citation:fuzzy_ok`) and clears an older
+  mark (`citation:unmarked`). Retargeting is untouched.
+- **How we know:** `tests/test_f8.py` reproduces both E2b cases (and asserts
+  the exact-only audit still marks them); reaudit of an E2b copy cleared
+  exactly those two marks and changed nothing else; E1/E1b replay tests pass.
+
 ### One ASR segment ran two minutes and failed P3 (E3, WP-F5)
 - **Symptom:** E3 (CLE-AI meetup, parakeet-mlx) failed P3 with a 122.9 s
   start-to-start gap at 1:53:41. Nothing was missing: one 229-word segment

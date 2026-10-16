@@ -3,7 +3,8 @@
 The chapters of a long recording were mapped in batches. Each batch proposed
 candidate cross-chapter themes; the same idea often appears in several
 batches under different words. You are given ONLY those candidate bullets
-(with their chapter numbers) and the list of chapter titles. You are not
+(with their chapter numbers) and the list of chapter titles, each with a
+short list of its key topics. You are not
 given the chapter notes, and you must not summarize the course.
 
 Output exactly this and nothing else:
@@ -19,5 +20,8 @@ followed by 3–8 bullets, each one theme that recurs across chapters:
 - Prefer themes that span the most chapters; drop a candidate that appears
   in only one chapter when there are enough broader ones.
 - A theme names a TOPIC, never a verdict or conclusion about it.
-- Use only the candidates given; add no new idea, chapter or detail.
+- Use only the candidates given; add no new idea or detail.
+- Each chapter comes with its key topics. Cite EVERY chapter whose key
+  topics include what a theme names — not only the chapters the candidates
+  cited (e.g. a hooks theme cites every chapter listing hooks as a topic).
 - At most 8 bullets. No preamble, no closing remarks, no questions.

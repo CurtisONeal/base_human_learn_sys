@@ -200,7 +200,8 @@ LONGFORM_SECTIONS: Dict[str, List[tuple]] = {
          "(code in ``` fences), each with one line saying what it does. Cited."),
         ("Special Attention",
          "Subtle, easy-to-get-wrong or explicitly warned-about points "
-         "(gotchas, security, common mistakes). Cited."),
+         "(gotchas, security, common mistakes). Cited. A computation or "
+         "correction of your own is labelled `Check:` here too."),
         ("Transcription Uncertainty",
          "The table described under Transcription Uncertainty below."),
         ("Time-Sensitive Claims",

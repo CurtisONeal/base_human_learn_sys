@@ -58,11 +58,14 @@ class MockLLM:
         self.fail_on_call = fail_on_call
 
     def __call__(self, system: str, user: str):
-        kind = "map" if "Course Map" in system else "passage"
+        kind = ("map" if "Course Map" in system
+                else "consistency" if "cross-section consistency" in system else "passage")
         if self.fail_on_call is not None and len(self.calls) + 1 == self.fail_on_call:
             self.calls.append(("fail", user))
             raise BudgetExhausted("cap reached (test)", provider="openai")
         self.calls.append((kind, user))
+        if kind == "consistency":
+            return "[]", "mock/consistency"
         if kind == "map":
             return self._map(user), "mock/map"
         return self._passage(user), "mock/passage"

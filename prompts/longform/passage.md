@@ -72,7 +72,21 @@ If the running ledger marks an entry `"status": "superseded"` or
   conversion or sanity check the speaker did not make, label it `Check:` and
   word it impersonally ("Check: 17 of 60 wrong is ~72%"). Never attribute it
   to the speaker ("his math check", "he verifies") unless the transcript
-  shows him doing it.
+  shows him doing it. EVERY computation the notes make carries `Check:` — in
+  every section, including Special Attention and Exam-relevant points.
+- **Correct a speaker's number only when the meaning is unambiguous.** If a
+  figure can be read more than one way, do not call it a slip and do not
+  "fix" it: present both readings, e.g. "'two times' the 12-hour course
+  (may mean watching at 2× speed, ~6 hours; or going through it twice,
+  ~24 hours)". Call a number wrong only when the speaker's own words leave a
+  single meaning, and then show the arithmetic as a `Check:`.
+- **A quoted figure belongs to the quoter.** When one speaker quotes another
+  speaker's (or a source's) number — "the story Morgan referenced earlier was
+  like 95%" — attribute it to the speaker who said it now: "Jason cited
+  Morgan as saying 95%", never "Morgan's figure was 95%". If the course
+  skeleton, the running ledger or this passage shows the original speaker's
+  own figure and it differs, note the discrepancy: "(Morgan's own figure was
+  ~80% — the two differ)".
 - **Definitions do not promise more than was said or shown.** Define a feature
   by what the passage states and, where a demo or lab shows it, by the
   observed behaviour. Do not add guarantees from general knowledge: if plan
