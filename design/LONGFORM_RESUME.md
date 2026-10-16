@@ -1,35 +1,29 @@
-# Resume notes (written 2026-10-15 ~23:30 ET before a usage-limit warning)
+# Resume notes — updated 2026-10-16 ~10:45 ET (usage-limit warning)
 
-If the managing session stopped at a usage limit, resume from here.
+## Done
+- All evals pass P1–P8 (E2d CCA-F, E3e meetup). See `LONGFORM_EXECUTION_PLAN.md` "Final status".
+- Notes + talk splits + plan + Fable review copied to the vault:
+  `~/Documents/obsidian_vault/syncing_vault2_clean_2026/000_inbox_new_notes/longform_notes_2026-10-16/`.
+- Talk split timestamps: `previous_run_results/E3e_cle_ai_meetup/talk_splits.md`.
+- FIXED_BUGS entries for late fixes committed (a32bd8a).
+- ADR-045 appended to `agent_set_up/ADR_INSTALL_LOG.md` — **NOT committed** (agent_set_up has the
+  user's own uncommitted edits: HUMANS.md, KEYBOARD_SETUP_TASKS.md deletion, bin/). Leave for the user.
 
-## In flight at the time of writing
-- **WP-6a** (ASR backend interface + benchmark) — agent was running real model benchmarks.
-  Branch `worktree-agent-aee6e32206e410827`. If it has a commit with `design/ASR_BENCHMARK.md`,
-  review + merge. If not, relaunch WP-6a with the spec in the plan (Architecture 8; WP-6a row):
-  `core/asr/` backends (faster-whisper, parakeet-mlx, mlx-whisper; lazy import; extra `asr-mlx`;
-  sync with ALL extras), `scripts/bench_asr.py`, 10-min windows at 0:47:36 and 4:15:46 from the
-  archived 7.5 GB wav (valid to 6.76 h) vs the CCA-F captions; WER + glossary hits; never read /Volumes.
-- **WP-3 (+WP-7)** — the integration package. Branch `worktree-agent-ad40ce487598e2d0d`.
-  If incomplete, relaunch with: wire metadata/structure/quality/notes_format/costs into a new
-  `core/longform.py`; length gate in `process` and `media`; CLI `longform <run_dir>` with
-  `--only`, `--plan-only`, `--resume`, `--concurrency`, `--out`; context carry = prompt header +
-  course skeleton + (for part i>1) ledger from part i-1 + ~150 s overlap tail labeled CONTEXT ONLY
-  + timestamped lines + mishearing hint + uncertainty block + time-sensitive fragment; fenced
-  ```ledger JSON (≤800 words) parsed/stripped; checkpoint `chunk_summaries/NN_slug_pI.md`,
-  `ledger/NN_pI.json`, `longform_state.json`; assembly = frontmatter + Course Map (one batched
-  reduce returning only a table + themes, deterministic fallback) + per-chapter sections
-  `## <title> [H:MM:SS–H:MM:SS]` (parts as `### Part i/n`) + merged Uncertainty + merged claims
-  (merge → validate(fill=True) → stamp_notes) + Fact-Checked; lint_notes → deterministic fix →
-  zero residual; no transcript appended. Tests on rendered prompts, resume, mocked end-to-end
-  eval on CCA-F (P1–P7 pass), plan-only = 17 passages. One real smoke call allowed on
-  `--only "MCP Ecosystem"` via claude-cli only.
+## In flight
+- **WP-M1** agent (branch `worktree-agent-ace1b24c4d43ce4f4`): (0) per-run cost cap `RUN_USD_CAP`
+  + `--usd-cap` flag on process/media/book/longform + API `usd_cap`; (1) caller audit + 
+  `tests/test_integration_mvp.py` driving every entry point (book EPUB/PDF, process md/txt/html,
+  YouTube with/without captions mocked, media clip + 2-part group, longform gate, API);
+  (3) minimal fixtures `tests/fixtures/mvp/` (< 2 MB, synthetic `say` audio) + README +
+  `scripts/smoke_all_paths.sh --dry-run`. If the branch has commits but no final report,
+  check `git log longform-pipeline..worktree-agent-ace1b24c4d43ce4f4` and re-send the task.
 
-## Next after those
-1. WP-6b (windowed long ASR from `~/Movies/CLE-AI-26_09_safety_copies/`, per-window checkpoint,
-   completeness gate, 4-part stitch; replace whole-file `to_wav()` in `media`).
-2. E1 pilot: `longform <CCA-F run dir> --only` Intro, SDK Setup, Sessions mgmt, Claude Code config
-   → eval P1–P7 + P8 reviewer agent (independent). Log in plan.
-3. E2 full CCA-F → E3 meetup.
-
-## Scheduled prompts (session-only)
-Hourly resume check at :17; one-shot deadline check Fri 13:37 ET (Discord via `hermes send`, verified working).
+## Next (user requests 2026-10-16 morning)
+1. Review + merge WP-M1 into `longform-pipeline`; run full suite + `-m integration`.
+2. README: confirm cumulative `METERED_USD_CAP` vs per-run `RUN_USD_CAP`/`--usd-cap` documented;
+   add `METERED_USD_CAP=10.0` (comment: cumulative over the ledger) to the repo `.env`
+   (append only; the file holds real keys — never print it).
+3. Report caller-audit table to the user; then ask before merging `longform-pipeline` → `main`
+   and before pushing (user wants to merge, then split talks and post to YouTube).
+- Hard rules: never touch `/Volumes/*` or `~/Movies/CLE-AI-26_09_safety_copies/`.
+- Deadline cron (Fri 13:37 ET) will send a Discord completion/overtime notice.
