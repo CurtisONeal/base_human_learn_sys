@@ -99,6 +99,17 @@ If the running ledger marks an entry `"status": "superseded"` or
   "observed" or state the result plainly only when the transcript shows the
   output itself.
 
+## People — who may be named
+
+- Name speakers, hosts and organisers as the transcript gives them. When the
+  transcript is machine-made, a name's spelling is the ASR's guess: do not
+  "correct" one spelling to another the audio cannot distinguish.
+- **Never name private individuals who are not speakers or organisers** —
+  raffle or giveaway winners, attendees, audience members asking questions.
+  Describe them by role: "a winner", "an attendee", "an audience member".
+  Do not give their employer or job title either ("a winner from <company>"
+  identifies them as well as a name does).
+
 ## Grounding — do not fabricate
 
 Base everything on the passage. If a section has nothing in this passage, write

@@ -1389,13 +1389,46 @@ def build_course_map(plan: Plan, notes_by_key: Dict[str, str], state: State,
 
 
 def outline_speakers(plan: Plan) -> List[Tuple[str, List[str]]]:
-    """(speaker, spelling variants) of the outline entries, in order, unique."""
-    out: List[Tuple[str, List[str]]] = []
+    """(speaker, spelling variants) of the outline entries, in order, unique.
+
+    WP-F9: for a machine transcript the variants also include spellings the
+    TRANSCRIPT uses for that speaker in a roll call or an introduction
+    ("Harsha" for the outline's "Archer", E3c) — see names.py."""
+    info = speaker_info(plan)
+    return [(sp, list(var)) for sp, var in info["variants"].items()]
+
+
+def speaker_info(plan: Plan) -> dict:
+    """{"variants": {speaker: [variants]}, "preferred": {speaker: spelling},
+    "found": {speaker: [(variant, how)]}} — computed once per plan."""
+    cached = getattr(plan, "_speaker_info", None)
+    if cached is not None:
+        return cached
     entries = plan.outline.entries if plan.outline is not None and plan.outline.entries else []
+    order: List[Tuple[str, List[str], float]] = []
     for e in entries:
-        if e.speaker and all(e.speaker != s for s, _ in out):
-            out.append((e.speaker, list(e.speaker_variants or [])))
-    return out
+        if e.speaker and all(e.speaker != sp for sp, _, _ in order):
+            order.append((e.speaker, list(e.speaker_variants or []), float(e.start_s)))
+    variants = {sp: list(var) for sp, var, _ in order}
+    preferred: Dict[str, str] = {}
+    found: Dict[str, list] = {}
+    if order and names.is_machine(plan.provenance) and plan.segments:
+        vocab = names.TranscriptVocab.build(plan.segments)
+        found = names.transcript_speaker_variants(order, plan.segments, vocab)
+        for sp, extra in found.items():
+            for w, _ in extra:
+                if w not in variants[sp]:
+                    variants[sp].append(w)
+            best = names.preferred_spelling(sp, variants[sp], vocab)
+            if best != sp:
+                preferred[sp] = best
+    info = {"variants": variants, "preferred": preferred,
+            "found": {k: v for k, v in found.items() if v}}
+    try:
+        plan._speaker_info = info
+    except Exception:  # noqa: BLE001 - a frozen plan just recomputes
+        pass
+    return info
 
 
 def _asr_names(plan: Plan) -> bool:
@@ -1412,10 +1445,12 @@ def display_title(plan: Plan, title: str) -> str:
     speakers = [s for s, _ in outline_speakers(plan)]
     if not speakers:
         return title
-    return names.hedge_title(title, speakers, names.metadata_words(plan.meta))
+    return names.hedge_title(title, speakers, names.metadata_words(plan.meta),
+                             preferred=speaker_info(plan)["preferred"])
 
 
-def _merge_uncertainty(plan: Plan, notes_by_key: Dict[str, str]) -> Tuple[str, dict]:
+def _merge_uncertainty(plan: Plan, notes_by_key: Dict[str, str],
+                       private: Sequence[str] = ()) -> Tuple[str, dict]:
     items: Dict[Tuple[str, str], dict] = {}
     omitted = known = 0
     asr = _asr_names(plan)
@@ -1461,10 +1496,14 @@ def _merge_uncertainty(plan: Plan, notes_by_key: Dict[str, str]) -> Tuple[str, d
         out += ["", "> " + "; ".join(notes) + "."]
     name_rows: List[names.NameRow] = []
     if asr:
+        info = speaker_info(plan)
         name_rows = names.names_rows(
             speakers=outline_speakers(plan),
             notes=[chapter_body(notes_by_key[p.key], 3) for p in plan.passages],
-            respellings=respellings, vocab=vocab, meta_words=meta_words)
+            respellings=respellings, vocab=vocab, meta_words=meta_words,
+            found=info["found"])
+        # WP-F9: private individuals are not listed (they are not named at all).
+        name_rows = [r for r in name_rows if r.name not in private]
         block = names.render_names(name_rows, plan.provenance_label)
         if block:
             out += ["", block.rstrip("\n")]
@@ -1607,15 +1646,37 @@ def assemble(plan: Plan, notes_by_key: Dict[str, str], course_map_md: str,
     as_of = notes_format.resolve_as_of(plan.meta)
     recorded = spoken_dates.estimate_event(plan.segments, as_of.date, as_of.basis)
     blocks = [_source_block(plan, models, partial, audit, recorded), course_map_md]
+    # WP-F9 names/privacy (machine transcripts only): people named only in
+    # giveaway/winner/attendee context are private — redacted, not listed;
+    # every other ASR-only name in the notes is hedged at its first mention
+    # in each chapter and listed in the names table.
+    private: List[str] = []
+    hedge: List[str] = []
+    if _asr_names(plan):
+        vocab = names.TranscriptVocab.build(plan.segments)
+        meta_words = names.metadata_words(plan.meta)
+        bodies = [chapter_body(notes_by_key[p.key], 3) for p in plan.passages]
+        found = names.note_names(bodies, vocab, meta_words)
+        protected = [sp for sp, var in outline_speakers(plan)] + [
+            v for _, var in outline_speakers(plan) for v in var]
+        private = names.private_names(bodies, found, protected)
+        hedge = [n for n in found if n not in private]
+    uncertainty_md, uncertainty_info = _merge_uncertainty(plan, notes_by_key, private)
+    hedged_total = 0
     for ch in plan.selected:
         blocks.append(f"## {display_title(plan, ch[0].title)} [{_chapter_range(ch)}]\n")
+        chapter_blocks = []
         if len(ch) == 1:
-            blocks.append(chapter_body(notes_by_key[ch[0].key], 3))
+            chapter_blocks.append(chapter_body(notes_by_key[ch[0].key], 3))
         else:
             for p in ch:
-                blocks.append(f"### Part {p.part}/{p.parts} [{p.range}]\n")
-                blocks.append(chapter_body(notes_by_key[p.key], 4))
-    uncertainty_md, uncertainty_info = _merge_uncertainty(plan, notes_by_key)
+                chapter_blocks.append(f"### Part {p.part}/{p.parts} [{p.range}]\n")
+                chapter_blocks.append(chapter_body(notes_by_key[p.key], 4))
+        text = "\n".join(b.rstrip() + "\n" for b in chapter_blocks)
+        if hedge:
+            text, n = names.hedge_names_in_body(text, hedge)
+            hedged_total += n
+        blocks.append(text)
     blocks.append(uncertainty_md)
     blocks.append(_merge_fact_checked(plan, notes_by_key))
     body = "\n".join(b.rstrip() + "\n" for b in blocks)
@@ -1624,6 +1685,9 @@ def assemble(plan: Plan, notes_by_key: Dict[str, str], course_map_md: str,
     body, normalized = citations.normalize_citation_commentary(
         body, citations.caption_validator([s.start for s in plan.segments]))
     body = citations.normalize_citation_markers(body)[0]
+    redactions: List[dict] = []
+    if private:
+        body, redactions = names.redact_private(body, private)
 
     # Time-sensitive claims: merge -> validate(fill) -> stamp. validate MUST
     # come first: a model row without a date fails P5 otherwise.
@@ -1654,6 +1718,9 @@ def assemble(plan: Plan, notes_by_key: Dict[str, str], course_map_md: str,
     )
     final = notes_format.stamp_notes(body, fm, check.rows)
     info = {
+        "names": {"hedged_in_body": hedged_total, "private_redacted": redactions,
+                  "speaker_variants_from_transcript": speaker_info(plan)["found"],
+                  "heading_spelling": speaker_info(plan)["preferred"]},
         "uncertainty": uncertainty_info,
         "time_sensitive_rows": len(check.rows),
         "time_sensitive_dropped": ts_dropped,

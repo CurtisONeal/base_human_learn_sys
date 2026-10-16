@@ -179,3 +179,93 @@ def test_real_e2c_preamble_form_counts_toward_all_chapters():
     themes, _ = lf.mark_all_chapter_themes([theme], labels)
     assert themes == [text + " (all chapters)"]
     assert lf.render_theme("X", ["-", "2", "1"]) == "X (preamble, ch. 1, 2)"
+
+
+# --- (n) names / privacy ------------------------------------------------------------
+
+from tests.test_longform import flat, small_run  # noqa: E402,F401  (fixture)
+
+
+def _meetup_segments():
+    return _tsegs(
+        (380, "Morgan, Harsha, Jason, Chris, and Louie have graciously taken some time out."),
+        (400, "Ted handles operations and the person who does our tech is Curtis."),
+        (1685, "So this is Harsha uh what you call it."),
+        (1707, "Archer's work focuses on helping organizations build platforms."),
+        (4340, "I'll go ahead and announce the winner from the submission."),
+        (4346, "Greg Van Lundran from Clear result, congratulations."))
+
+
+def test_transcript_variant_found_by_roll_call_and_introduction():
+    from video2mdnotes.core import names
+    segs_ = _meetup_segments()
+    vocab = names.TranscriptVocab.build(segs_)
+    speakers = [("Morgan", [], 391.0), ("Archer", [], 1682.0), ("Jason Tabling", [], 2707.0),
+                ("Chris Halasey", ["Chris Halasi"], 4378.0), ("Louis", ["Louie"], 5501.0)]
+    found = names.transcript_speaker_variants(speakers, segs_, vocab)
+    assert [w for w, _ in found["Archer"]] == ["Harsha"]
+    assert "roll call" in found["Archer"][0][1]
+    assert found["Morgan"] == [] and found["Louis"] == []
+    # introduction alone (no roll call) also finds it
+    found2 = names.transcript_speaker_variants(speakers, segs_[2:], names.TranscriptVocab.build(segs_[2:]))
+    assert [w for w, _ in found2["Archer"]] == ["Harsha"]
+    assert "introduction" in found2["Archer"][0][1]
+    # the heading prefers the spelling heard more often
+    assert names.preferred_spelling("Archer", ["Harsha"], vocab) == "Harsha"
+    assert names.hedge_title("Nutanix platforms (Archer)", ["Archer"], set(),
+                             preferred={"Archer": "Harsha"}) == \
+        "Nutanix platforms — Harsha (ASR spelling; also heard as Archer)"
+
+
+def test_names_table_lists_transcript_variant_of_speaker():
+    from video2mdnotes.core import names
+    segs_ = _meetup_segments()
+    vocab = names.TranscriptVocab.build(segs_)
+    rows = names.names_rows(speakers=[("Archer", ["Harsha"])], notes=[], respellings=[],
+                            vocab=vocab, meta_words=set(),
+                            found={"Archer": [("Harsha", "roll call [0:06:20]")]})
+    assert rows[0].spellings == [("Archer", 1), ("Harsha", 2)]
+    assert "transcript calls this speaker Harsha" in rows[0].source
+
+
+def test_backticked_organiser_names_are_found_and_hedged_but_products_are_not():
+    from video2mdnotes.core import names
+    notes = ("### Key Concepts & Vocabulary\n"
+             "- `Ted Shoxal` - the evening's MC; handles most of the operations [0:02:57].\n"
+             "- `Curtis O'Neill` - handles tech and recording [0:03:27].\n"
+             "- `Amazon Bedrock`: model-provider service with API access to models [0:13:03].\n")
+    vocab = names.TranscriptVocab.build(_tsegs(
+        (1, "Ted Shoxal runs it, Curtis O'Neill records, Amazon Bedrock hosts models.")))
+    found = names.note_names([notes], vocab, set())
+    assert found == ["Ted Shoxal", "Curtis O'Neill"]
+    out, n = names.hedge_names_in_body(notes, found)
+    assert n == 2
+    assert "`Ted Shoxal` (ASR spelling) - the evening's MC" in out
+    assert "`Curtis O'Neill` (ASR spelling) - handles" in out
+    again, n2 = names.hedge_names_in_body(out, found)       # idempotent
+    assert again == out and n2 == 0
+
+
+def test_raffle_winner_is_redacted_and_logged_but_organisers_kept():
+    from video2mdnotes.core import names
+    chapter = ("- After the break the organiser Ted Shoxal announced the winner [1:12:18].\n"
+               "- The winner was picked at random from 112 submissions: Greg Van Lundran, "
+               "Senior Business Analyst at Clear result [1:12:26] [1:12:35].\n"
+               "- Ted Shoxal thanked the sponsors [1:13:00].\n"
+               "- Another prize went to a winner from Acme Corp [1:14:00].\n")
+    private = names.private_names([chapter], ["Ted Shoxal", "Greg Van Lundran"], ["Morgan"])
+    assert private == ["Greg Van Lundran"]
+    out, log = names.redact_private(chapter, private)
+    assert "Lundran" not in out and "Clear result" not in out
+    assert "112 submissions: an attendee (name withheld) [1:12:26]" in out
+    assert "went to a winner [1:14:00]" in out
+    assert "Ted Shoxal" in out
+    assert {e["name"] for e in log} == {"Greg Van Lundran", "<organisation of a winner>"}
+
+
+def test_passage_prompt_forbids_naming_private_individuals(small_run):
+    from video2mdnotes.core import longform as lf
+    plan = lf.build_plan(small_run, max_words=800, write=False)
+    text = flat(lf.render_passage_prompt(plan, plan.passages[0]).text)
+    assert "Never name private individuals who are not speakers or organisers" in text
+    assert "raffle or giveaway winners, attendees" in text
