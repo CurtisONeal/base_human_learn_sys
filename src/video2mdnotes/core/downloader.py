@@ -8,6 +8,7 @@ import yt_dlp
 from video2mdnotes.config import settings
 from video2mdnotes.logger import logger
 from video2mdnotes.core.embeds import scrape_embed_urls
+from video2mdnotes.core.metadata import SourceMeta, from_ytdlp_info
 
 class SourceInfo(BaseModel):
     """Metadata for one video, gathered without downloading any audio.
@@ -28,6 +29,10 @@ class SourceInfo(BaseModel):
     # one directory instead of scattering them by date across the output root.
     playlist_title: Optional[str] = None
     playlist_id: Optional[str] = None
+    # Publication facts from the same info dict (upload date, uploader,
+    # duration, chapters). Written to source_meta.json by the caller once the
+    # run directory exists.
+    meta: Optional[SourceMeta] = None
 
 
 class DownloadResult(BaseModel):
@@ -140,6 +145,7 @@ def probe_source(url: str, allow_embed_scrape: bool = True) -> List[SourceInfo]:
             has_automatic_captions=bool(entry.get('automatic_captions')),
             playlist_title=playlist_title,
             playlist_id=playlist_id,
+            meta=from_ytdlp_info(entry),
         ))
     return sources
 

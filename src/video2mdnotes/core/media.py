@@ -76,6 +76,8 @@ _AUDIO_STREAM = re.compile(
     r"Stream #\d+:\d+.*?:\s*Audio:\s*([A-Za-z0-9_]+).*?(\d+)\s*Hz,\s*([^,]+)", re.S
 )
 _VIDEO_STREAM = re.compile(r"Stream #\d+:\d+.*?:\s*Video:")
+# Container metadata tag. Device clock — see SourceMeta.recorded_at.
+_CREATION_TIME = re.compile(r"^\s*creation_time\s*:\s*(\S+)", re.M)
 # Recognised so the user is told the real problem rather than "decode failed".
 _DRM = re.compile(r"drm|encrypted|protected content|sample_aes", re.I)
 
@@ -104,6 +106,9 @@ class MediaInfo:
     sample_rate: int
     channels: str
     has_video: bool
+    # Raw `creation_time` tag if the container has one. The recording device's
+    # clock, which is often wrong — never treat it as a publish date.
+    creation_time: Optional[str] = None
 
     @property
     def is_probably_speech(self) -> bool:
@@ -182,6 +187,7 @@ def probe(path: Path) -> MediaInfo:
         sample_rate=int(audio.group(2)),
         channels=audio.group(3).strip(),
         has_video=bool(_VIDEO_STREAM.search(output)),
+        creation_time=(m.group(1) if (m := _CREATION_TIME.search(output)) else None),
     )
 
 

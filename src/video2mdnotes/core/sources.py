@@ -63,6 +63,18 @@ class Segment(BaseModel):
     text: str
 
 
+class Chapter(BaseModel):
+    """One publisher-declared (or description-parsed) chapter of a media source.
+
+    `end_s` is derived from the next chapter's start (or the duration), never
+    guessed independently.
+    """
+
+    start_s: float
+    end_s: Optional[float] = None
+    title: str = ""
+
+
 class SourceText(BaseModel):
     """Text plus the truth about where it came from.
 
@@ -92,6 +104,14 @@ class SourceText(BaseModel):
     # Set when a structural guess was made rather than read from the file, so a
     # downstream reader can discount the locators accordingly.
     structure_is_inferred: bool = False
+
+    # Publication facts, when known (see core/metadata.py). All optional so
+    # every existing caller and serialized SourceText stays valid. None means
+    # "unknown" — never substitute the capture date for the publish date.
+    published_at: Optional[dt.date] = None
+    published_by: Optional[str] = None
+    duration_s: Optional[float] = None
+    chapters: List[Chapter] = Field(default_factory=list)
 
     @property
     def word_count(self) -> int:

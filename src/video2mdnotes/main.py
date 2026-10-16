@@ -223,6 +223,7 @@ def media(
     from video2mdnotes.core.media import (
         MediaError, describe, find_media, probe as probe_media, to_wav,
     )
+    from video2mdnotes.core.metadata import from_local_media
     from video2mdnotes.core.downloader import sanitize_filename
 
     if on_exhaustion:
@@ -267,6 +268,8 @@ def media(
             console.print("      [dim]Skipping (already summarized)[/dim]")
             skipped += 1
             continue
+
+        from_local_media(info, title=source_file.stem).write(project_dir)
 
         wav_dir = project_dir / "audio"
         wav_path = wav_dir / f"{safe_title}.wav"
@@ -892,6 +895,8 @@ def process(
                 transcript_result.markdown_content, encoding="utf-8"
             )
             (project_dir / "original_url.txt").write_text(source.url, encoding="utf-8")
+            if source.meta is not None:
+                source.meta.write(project_dir)
 
             # 3. Summarize — retries across a limit reset when policy is "wait".
             logger.info("Step 3: Generating Summary...")
