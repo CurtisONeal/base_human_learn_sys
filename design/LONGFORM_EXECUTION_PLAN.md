@@ -231,3 +231,10 @@ _(append each run: date, eval, P1–P8 results, cost, decision)_
 - 2026-10-16 ~01:30–04:20 ET: subscription session limit hit (reset 04:20). WP-F9 agent stopped after committing (a)–(h) (6e057f7, bf25599). Resumed at 04:34 ET for (i)–(o).
 - WP-F9 merged (9 commits, 691 pass): all 15 review items (a)–(o) verified and fixed, none rejected. Structural: one windowed transcription path for all local media and caption-less downloads (whole-file `to_wav` removed); symmetric seam overlap; atomic cap reservation; anthropic/* refused unless ALLOW_ANTHROPIC_API=true; /Volumes refused; names/privacy (variants, organiser hedging, private individuals withheld).
 - Final runs started ~05:05 ET: **E3d** = full pipeline from safety copies (`media --group`, windowed ASR → outline → long-form), **E2d** = full CCA-F long-form.
+
+### 2026-10-16 05:00–05:20 ET · Final runs after WP-F9
+- **E3d** (full pipeline from safety copies: `media --group` → windowed parakeet ASR → outline → long-form; 12 m 51 s): P1 PASS 11/11 · P2 PASS 988/988 · P3 PASS · P4 PASS · P5 PASS 68/68 · P6 PASS · P7 PASS.
+- **E2d** INCOMPLETE: subscription session limit hit mid-run ("You've hit your session limit · resets 9:30am") — the CLI's new wording was not recognised as exhaustion, so 3 passages failed instead of waiting (14/17 checkpointed). **Bug fixed** 7780b15 (pattern + clock-time reset parsing, regression test).
+- User supplied the real event: **CLE AI & Data Mega Meetup @ The Natural History Museum, Monday 28 September 2026**, Meetup link + description (agenda, 5 talks: AWS, Nutanix, Arista Networks, Further, OpenAI; sponsors). Written into E3d `source_meta.json` (backup kept) as published 2026-09-28 / Cleveland AI & Data (Meetup). The pipeline's spoken-date inference (2026-09/10) agrees.
+- ~09:40 ET: **E3e** (E3d transcript + real event metadata, fresh notes) and **E2d resume** (3 remaining passages) running.
+- Follow-up idea (not built): `media/longform --event-date --description-file --source-url` flags so users can supply event metadata without editing JSON.
