@@ -183,6 +183,12 @@ def _encode(image_path: Path) -> tuple[str, str]:
 def describe_image(image_path: Path, model: Optional[str] = None) -> str:
     """Ask a vision model what a frame shows. Returns "" if it declines or fails."""
     model = model or settings.vlm_model
+    from video2mdnotes.core.costs import AnthropicApiRefused, refuse_anthropic_api
+    try:
+        refuse_anthropic_api(model)
+    except AnthropicApiRefused as e:
+        logger.warning(str(e))
+        return ""
     media_type, data = _encode(image_path)
 
     try:

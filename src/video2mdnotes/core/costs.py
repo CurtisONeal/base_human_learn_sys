@@ -66,6 +66,21 @@ class BudgetExhausted(Exception):
         self.estimate = estimate
 
 
+class AnthropicApiRefused(RuntimeError):
+    """An `anthropic/*` route was refused: the Anthropic API credit is reserved
+    (advisor + final code review) and the pipeline must never spend it."""
+
+
+def refuse_anthropic_api(model: str) -> None:
+    """Raise AnthropicApiRefused for an anthropic/* model unless
+    ALLOW_ANTHROPIC_API=true. Called BEFORE any ledger check or network call."""
+    bare = (model or "").strip().lower()
+    if bare.startswith("anthropic/") and not getattr(settings, "allow_anthropic_api", False):
+        raise AnthropicApiRefused(
+            f"{model}: anthropic/* routes are refused — the Anthropic API credit is "
+            "reserved. Set ALLOW_ANTHROPIC_API=true to permit it deliberately.")
+
+
 # --- Pricing ------------------------------------------------------------------
 
 # USD per 1M tokens (input, output). Used only when litellm has no price for a
@@ -228,21 +243,9 @@ class CostLedger:
             self._write(data)
         return entry
 
-    def check(self, provider: str, estimate_usd: float,
-              total_cap: float | None, provider_caps: dict[str, float] | None) -> None:
-        """Raise BudgetExhausted if a metered call of this estimate could overrun a cap.
-
-        Not atomic with `record` across processes — two concurrent runs can
-        each pass the check. One run per ledger is the supported mode.
-        """
-        try:
-            entries = self.entries()
-        except Exception as exc:  # noqa: BLE001 - unknown spend: fail closed
-            raise BudgetExhausted(
-                f"cost ledger unreadable ({exc}); refusing metered call to {provider}",
-                provider=provider,
-            ) from exc
-
+    @staticmethod
+    def _check_entries(entries: list[dict], provider: str, estimate_usd: float,
+                       total_cap: float | None, provider_caps: dict[str, float] | None) -> None:
         metered = [e for e in entries if e.get("kind") == METERED]
         total = sum(float(e.get("usd", 0.0)) for e in metered)
         mine = sum(float(e.get("usd", 0.0)) for e in metered if e.get("provider") == provider)
@@ -261,6 +264,94 @@ class CostLedger:
                 f"to ${estimate_usd:.4f}",
                 provider=provider, spent=total, cap=float(total_cap), estimate=estimate_usd,
             )
+
+    def check(self, provider: str, estimate_usd: float,
+              total_cap: float | None, provider_caps: dict[str, float] | None) -> None:
+        """Raise BudgetExhausted if a metered call of this estimate could overrun a cap.
+
+        Read-only. A caller that goes on to make the call must use `reserve`
+        instead: check-then-record is not atomic (three chapter threads
+        would each pass against the same total).
+        """
+        try:
+            entries = self.entries()
+        except Exception as exc:  # noqa: BLE001 - unknown spend: fail closed
+            raise BudgetExhausted(
+                f"cost ledger unreadable ({exc}); refusing metered call to {provider}",
+                provider=provider,
+            ) from exc
+        self._check_entries(entries, provider, estimate_usd, total_cap, provider_caps)
+
+    def reserve(self, *, provider: str, model: str, estimate_usd: float,
+                total_cap: float | None, provider_caps: dict[str, float] | None,
+                input_tokens: int = 0, run_id: str | None = None) -> str:
+        """Atomically check the caps AND book the worst-case estimate.
+
+        Under one exclusive flock (serialises threads and processes alike):
+        read, check, append a `reserved` entry charged at the estimate.
+        `settle` later replaces it with the measured cost; a crash in between
+        leaves the estimate charged, which errs toward stopping. Returns the
+        reservation id.
+        """
+        rid = uuid.uuid4().hex
+        with self._locked():
+            try:
+                data = self._read()
+            except Exception as exc:  # noqa: BLE001 - unknown spend: fail closed
+                raise BudgetExhausted(
+                    f"cost ledger unreadable ({exc}); refusing metered call to {provider}",
+                    provider=provider,
+                ) from exc
+            self._check_entries(data["entries"], provider, estimate_usd,
+                                total_cap, provider_caps)
+            data["entries"].append({
+                "id": rid,
+                "timestamp": dt.datetime.now().isoformat(timespec="seconds"),
+                "run_id": run_id or current_run_id(),
+                "provider": provider,
+                "model": model,
+                "kind": METERED,
+                "input_tokens": int(input_tokens),
+                "output_tokens": 0,
+                "usd": round(float(estimate_usd), 6),
+                "estimated": True,
+                "reserved": True,
+            })
+            self._write(data)
+        return rid
+
+    def settle(self, reservation_id: str, *, input_tokens: int | None = None,
+               output_tokens: int | None = None, usd: float | None = None,
+               estimated: bool = True, note: str | None = None) -> dict | None:
+        """Replace a reservation with the call's real (or estimated) cost.
+
+        usd=None keeps the reserved estimate (a call that failed after it may
+        have been billed). Returns the updated entry, or None if not found.
+        """
+        with self._locked():
+            data = self._read()
+            for e in data["entries"]:
+                if e.get("id") == reservation_id:
+                    if input_tokens is not None:
+                        e["input_tokens"] = int(input_tokens)
+                    if output_tokens is not None:
+                        e["output_tokens"] = int(output_tokens)
+                    if usd is not None:
+                        e["usd"] = round(float(usd), 6)
+                    e["estimated"] = bool(estimated)
+                    e.pop("reserved", None)
+                    if note:
+                        e["note"] = note
+                    self._write(data)
+                    return dict(e)
+        return None
+
+    def release(self, reservation_id: str) -> None:
+        """Drop a reservation for a call that was certainly not billed."""
+        with self._locked():
+            data = self._read()
+            data["entries"] = [e for e in data["entries"] if e.get("id") != reservation_id]
+            self._write(data)
 
 
 def get_ledger() -> CostLedger:

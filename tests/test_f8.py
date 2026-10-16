@@ -130,9 +130,10 @@ def test_apply_annotates_superseded_and_discrepancy_only(tmp_path):
     out = res.notes_by_key
     assert res.status == "applied" and len(calls) == 1
     pointer = '_(superseded: see [1:12:21] in ch. 3 "Intermission")_'
-    assert ("- The giveaway draw is postponed; the winner will be announced Wednesday "
-            f"[0:01:50] [0:02:00]. {pointer}") in out["k1"]
-    assert f"- The giveaway was not drawn at the event [0:01:53]. {pointer}" in out["k1"]
+    # WP-F9: the false clause leads these bullets, so "(superseded)" comes first.
+    assert ("- (superseded) The giveaway draw is postponed; the winner will be announced "
+            f"Wednesday [0:01:50] [0:02:00]. {pointer}") in out["k1"]
+    assert f"- (superseded) The giveaway was not drawn at the event [0:01:53]. {pointer}" in out["k1"]
     assert (f"| (superseded) The giveaway winner will be announced Wednesday {pointer} | [0:02:00] |"
             in out["k1"])
     # discrepancy: the LATER (quoting) statement is annotated, not Morgan's 80%

@@ -31,12 +31,21 @@ Rules:
 - When one later statement contradicts several earlier statements (the same
   plan restated in a summary, a warning and a time-sensitive row), list EACH
   earlier statement as its own pair.
-- `kind` is `"superseded"` when the later statement records what actually
-  happened, so the earlier one is out of date; `"discrepancy"` when two
-  figures or attributions disagree and the notes cannot tell which is right
-  (e.g. a quoted figure that differs from the original speaker's).
+- `kind` is `"superseded"` ONLY when the later statement REPLACES the
+  earlier one as fact — the earlier statement is now simply false (a plan
+  that was cancelled, an outcome that turned out differently: "will be
+  announced Wednesday" vs "the winner was drawn tonight").
+- `kind` is `"partly contradicted"` when the later section shows the earlier
+  statement was only partly true or had exceptions, but it is not replaced
+  (e.g. "setup is not covered in this course" vs a later quick install
+  demo).
+- `kind` is `"discrepancy"` when two figures or attributions disagree and the
+  notes cannot tell which is right (e.g. a quoted figure that differs from
+  the original speaker's). When unsure, use `"discrepancy"`, never
+  `"superseded"`.
 - `resolution` is ONE short sentence saying what the later section shows,
-  using only the statements given.
+  using only the statements given. Use the words of the specific clause that
+  conflicts (the notes point readers at that clause's citation).
 - Use only the reference ids given. Never invent a statement.
 
 Reply with ONLY a JSON array and nothing else (an empty array `[]` when there

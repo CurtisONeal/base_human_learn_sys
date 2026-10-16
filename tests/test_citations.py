@@ -136,7 +136,10 @@ def test_e1_replay_retargets_the_two_reviewer_findings(tmp_path):
     (run / cit.AUDIT_FILENAME).unlink(missing_ok=True)
     before = {p.name: p.read_text() for p in (run / "chunk_summaries").glob("*.md")}
     entries = lf.reaudit_chunks(run)
-    changed = [e for e in entries if e["changed"]]
+    normalized = [e for e in entries if e["changed"] and e["rule"] == "citation:normalized"]
+    changed = [e for e in entries if e["changed"] and e["rule"] != "citation:normalized"]
+    # WP-F9: the model's "[8:12:35 area, 7:50:35]" is bracket commentary too.
+    assert [e["original"] for e in normalized] == ["[8:12:35 area, 7:50:35]"]
     by_claim = {e["claim"]: e for e in changed}
     jq = by_claim["Reading the file directly instead of jq ."]
     glob = by_claim["Glob instead of `ls` ."]

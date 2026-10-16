@@ -28,8 +28,9 @@ explicitly and a test asserts it: a local file must never trigger a download.
 **Getting files off a recorder is a separate problem from decoding them**, and
 this module cannot solve it. Three cases, in descending order of luck:
 
-* **USB mass storage** — the device appears under `/Volumes`. Point straight at
-  it: `media /Volumes/RECORDER --probe`. No copying step needed.
+* **USB mass storage** — the device appears under `/Volumes`. Copy the files
+  off first (and verify the copy): `media` and `process` refuse `/Volumes/...`
+  inputs, because the card holds the only original.
 * **MTP** — macOS will not mount it at all. Needs Android File Transfer or
   similar; nothing in this repo helps.
 * **Proprietary container** — the files copy over but ffmpeg cannot read them.
@@ -67,8 +68,7 @@ SUPPORTED = AUDIO_SUFFIXES | VIDEO_SUFFIXES
 # ignore the failure list. Compound suffixes settle it without sniffing.
 EXCLUDED_COMPOUND_SUFFIXES = (".d.mts", ".d.ts", ".d.cts")
 
-# Whisper wants 16 kHz mono. Converting once here means the model never sees a
-# 48 kHz stereo file it would resample internally anyway.
+# ASR wants 16 kHz mono; every extracted window is decoded to it.
 TARGET_RATE = 16_000
 
 _DURATION = re.compile(r"Duration:\s*(\d+):(\d\d):(\d\d(?:\.\d+)?)")
@@ -86,6 +86,10 @@ _DRM = re.compile(r"drm|encrypted|protected content|sample_aes", re.I)
 
 class MediaError(RuntimeError):
     """Base for everything this module refuses."""
+
+
+class RemovableMediaError(MediaError):
+    """The input lives on removable media; only a safety copy may be read."""
 
 
 class NoAudioStreamError(MediaError):
@@ -202,46 +206,53 @@ def probe(path: Path) -> MediaInfo:
     )
 
 
-def to_wav(path: Path, destination: Path, info: Optional[MediaInfo] = None) -> Path:
-    """Decode anything ffmpeg understands into 16 kHz mono PCM wav.
+_PROGRESS_TIME = re.compile(r"time=\s*(\d+):(\d\d):(\d\d(?:\.\d+)?)")
 
-    `-vn` matters: handed an `.mp4`, ffmpeg would otherwise try to carry the
-    video stream into a wav container and fail with a message about muxers that
-    says nothing about the real situation.
+
+def measure_duration(path: Path, timeout_s: float = 3600.0) -> float:
+    """Audio duration found by decoding the audio stream to the null muxer.
+
+    For files whose container reports no `Duration:` (a camera that lost
+    power before writing its index, a stream dump). Nothing is written —
+    ffmpeg reads to EOF and reports the last decoded timestamp — so this
+    never creates a whole-file audio intermediate. Returns 0.0 if ffmpeg
+    decoded nothing.
     """
-    path, destination = Path(path), Path(destination)
-    info = info or probe(path)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-
+    path = Path(path)
     proc = subprocess.run(
-        [
-            _ffmpeg(), "-hide_banner", "-loglevel", "error", "-y",
-            "-i", str(path),
-            "-vn",                       # drop video; we only want speech
-            "-ac", "1",
-            "-ar", str(TARGET_RATE),
-            "-c:a", "pcm_s16le",
-            str(destination),
-        ],
-        capture_output=True, text=True, timeout=3600,
+        [_ffmpeg(), "-hide_banner", "-nostdin", "-i", str(path),
+         "-vn", "-map", "0:a:0", "-f", "null", "-"],
+        capture_output=True, text=True, timeout=timeout_s,
     )
-    if proc.returncode != 0 or not destination.exists():
-        raise UnreadableMediaError(
-            f"{path.name}: conversion failed — {(proc.stderr or '').strip()[:200]}"
+    found = _PROGRESS_TIME.findall(proc.stderr or "")
+    if not found:
+        return 0.0
+    h, m, sec = found[-1]
+    return int(h) * 3600 + int(m) * 60 + float(sec)
+
+
+def refuse_removable(path: Path) -> None:
+    """Refuse to read straight from removable media (/Volumes/...).
+
+    Hard constraint: originals are copied, SHA-256 verified and made
+    read-only before any use. An SD card or recorder mounted under /Volumes
+    is the original; work from its safety copy instead.
+    """
+    resolved = str(Path(path).expanduser().resolve())
+    if resolved.startswith("/Volumes/") or str(path).startswith("/Volumes/"):
+        raise RemovableMediaError(
+            f"{path}: refusing to read from /Volumes (removable media — the "
+            "original). Make a verified safety copy first (copy, check SHA-256, "
+            "chmod a-w) and point this command at the copy."
         )
-    if destination.stat().st_size < 1024:
-        raise NoAudioStreamError(
-            f"{path.name}: produced an empty audio track ({info.human_duration} "
-            "reported). The file may be silent or truncated."
-        )
-    return destination
 
 
 def extract_window(path: Path, destination: Path, start_s: float, duration_s: float) -> Path:
     """Decode ONE bounded window of a file to 16 kHz mono PCM wav.
 
-    The long-recording path (core/longasr.py) uses this instead of `to_wav`:
-    a whole multi-hour recording is never converted to one audio file. `-ss`
+    The only decode path for transcription (core/longasr.py): a recording
+    is never converted whole to one audio file (there is no `to_wav` any
+    more — removed in WP-F9 so the rule is structural). `-ss`
     before `-i` seeks the input, so the cost is proportional to the window,
     not to its position in the file.
     """

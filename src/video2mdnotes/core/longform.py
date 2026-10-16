@@ -319,8 +319,9 @@ def build_plan(
     name = notes_name(raw)
     meta, meta_origin = load_meta(run_dir, name, raw)
     provenance = quality.infer_provenance(run_dir)
-    glossary = quality.build_glossary(meta)
     segments = load_segments(raw)
+    glossary = quality.build_glossary(
+        meta, transcript_text=" ".join(s.text for s in segments))
     if meta.duration_s and segments and segments[-1].end > meta.duration_s >= segments[-1].start:
         # The last cue's end is a speech-rate estimate; never let it push the
         # media end (and the last chapter's cited range) past the real duration.
@@ -1009,15 +1010,19 @@ def _map_collapsed(text: str, batch: List[List[Passage]], gists: Dict[str, str])
 # the candidate bullets and chapter titles only — never the chapter notes)
 # consolidates them into <= MAX_THEMES, with a deterministic merge as fallback.
 
-_THEME_CH = re.compile(r"\s*\((?:ch(?:apters?|s)?\.?|§)\s*([^)]*)\)\s*\.?\s*$", re.I)
+_THEME_CH = re.compile(
+    r"\s*\((?P<pre>preamble\s*[,;]\s*)?(?:ch(?:apters?|s)?\.?|§)\s*([^)]*)\)\s*\.?\s*$", re.I)
 
 
 def split_theme(theme: str) -> Tuple[str, List[str]]:
-    """("Theme text", ["2", "5"]) from "Theme text (ch. 2, 5)"."""
+    """("Theme text", ["2", "5"]) from "Theme text (ch. 2, 5)"; the preamble
+    ("(preamble, ch. 1, 2)", as the model writes it) is label "-"."""
     m = _THEME_CH.search(theme or "")
     if not m:
         return (theme or "").strip(), []
-    chs = [c for c in re.split(r"[,;&\s]+|\band\b", m.group(1)) if c.strip()]
+    chs = [c for c in re.split(r"[,;&\s]+|\band\b", m.group(2)) if c.strip()]
+    if m.group("pre"):
+        chs = ["-"] + chs
     return theme[: m.start()].strip(), chs
 
 
@@ -1026,8 +1031,11 @@ def _ch_key(c: str):
 
 
 def render_theme(text: str, chapters: Sequence[str]) -> str:
-    chs = sorted(set(chapters), key=_ch_key)
-    return f"{text} (ch. {', '.join(chs)})" if chs else text
+    chs = sorted(set(chapters) - {"-"}, key=_ch_key)
+    pre = "preamble, " if "-" in chapters else ""
+    if not chs:
+        return f"{text} (preamble)" if pre else text
+    return f"{text} ({pre}ch. {', '.join(chs)})"
 
 
 def merge_themes(candidates: Sequence[str], limit: int = MAX_THEMES,
@@ -1156,12 +1164,28 @@ def generic_topic_words(chapter_texts: Dict[str, str], max_df: float = GENERIC_T
     return {t for t, k in df.items() if k / n > max_df}
 
 
-def chapter_topic_lists(plan: Plan, notes_by_key: Dict[str, str]
+def chapter_topic_lists(plan: Plan, notes_by_key: Dict[str, str], full: bool = False
                         ) -> Tuple[Dict[str, List[str]], List[str]]:
-    """({chapter label: key topics}, one-word topics dropped as generic). The
-    same lists go to the themes call and to the tagging post-check."""
-    raw = {_chapter_label(ch): chapter_topics(ch, notes_by_key, limit=3 * MAX_TOPICS)
+    """({chapter label: key topics}, one-word topics dropped as generic).
+
+    full=False: at most MAX_TOPICS per chapter — what the themes call sees.
+    full=True: EVERY Key Concepts term and sub-heading plus the chapter title
+    — what the tagging post-check matches against. (E2c: ch. 7 teaches plan
+    mode, but "plan mode" was its 11th term, cut from the 8-topic list, so
+    the plan-mode theme never got ch. 7 — F9 (m).)"""
+    limit = 10 ** 6 if full else 3 * MAX_TOPICS
+    raw = {_chapter_label(ch): chapter_topics(ch, notes_by_key, limit=limit)
            for ch in plan.selected}
+    if full:
+        for ch in plan.selected:
+            # The title, and its distinctive words ("permissions", "safety"):
+            # a theme naming one of them is about this chapter too.
+            title = _clean_topic(ch[0].title)
+            if title:
+                raw[_chapter_label(ch)].append(title)
+                raw[_chapter_label(ch)] += [
+                    w for w in re.findall(r"[A-Za-z][A-Za-z-]{4,}", title)
+                    if w.lower() not in citations.STOPWORDS]
     generic = generic_topic_words({
         _chapter_label(ch): "\n".join(chapter_body(notes_by_key[p.key], 3) for p in ch)
         for ch in plan.selected})
@@ -1176,7 +1200,7 @@ def chapter_topic_lists(plan: Plan, notes_by_key: Dict[str, str]
                     dropped.append(t)
                 continue
             keep.append(t)
-        topics[label] = keep[:MAX_TOPICS]
+        topics[label] = keep if full else keep[:MAX_TOPICS]
     return topics, dropped
 
 
@@ -1205,6 +1229,28 @@ def tag_theme_chapters(themes: Sequence[str], topics: Dict[str, List[str]],
                     break
         out.append(render_theme(text, have) if have != list(chs) else theme)
     return out, log
+
+
+ALL_CHAPTERS_FRACTION = 0.9
+
+
+def mark_all_chapter_themes(themes: Sequence[str], labels: Sequence[str],
+                            fraction: float = ALL_CHAPTERS_FRACTION
+                            ) -> Tuple[List[str], List[str]]:
+    """A theme tagged on >= `fraction` of the chapters keeps its text but its
+    tag list becomes "(all chapters)": a list of every chapter number tells a
+    skimmer nothing. Returns (themes, texts so marked)."""
+    real = [lb for lb in labels if lb != "-"]
+    out, marked = [], []
+    for theme in themes:
+        text, chs = split_theme(theme)
+        hit = {c for c in chs if c in real}
+        if real and len(real) >= 3 and len(hit) >= fraction * len(real):
+            out.append(f"{text} (all chapters)")
+            marked.append(text)
+        else:
+            out.append(theme)
+    return out, marked
 
 
 def _themes_input(plan: Plan, candidates: Sequence[str],
@@ -1313,11 +1359,15 @@ def build_course_map(plan: Plan, notes_by_key: Dict[str, str], state: State,
     topics, generic_dropped = chapter_topic_lists(plan, notes_by_key)
     themes, theme_model, theme_calls, theme_fallback = consolidate_themes(
         plan, candidates, state, complete, resume=resume, progress=progress, topics=topics)
-    themes, tags_added = tag_theme_chapters(themes, topics)
+    tag_terms, _ = chapter_topic_lists(plan, notes_by_key, full=True)
+    themes, tags_added = tag_theme_chapters(themes, tag_terms)
+    themes, all_chapter_themes = mark_all_chapter_themes(
+        themes, [_chapter_label(ch) for ch in plan.selected])
     with state.lock:
         state.data["course_map"]["theme_tags"] = {
             "topics": topics, "added": tags_added,
-            "generic_one_word_topics_dropped": generic_dropped}
+            "generic_one_word_topics_dropped": generic_dropped,
+            "all_chapters": all_chapter_themes}
         state.save()
     calls += theme_calls
     if theme_model:
@@ -1339,13 +1389,46 @@ def build_course_map(plan: Plan, notes_by_key: Dict[str, str], state: State,
 
 
 def outline_speakers(plan: Plan) -> List[Tuple[str, List[str]]]:
-    """(speaker, spelling variants) of the outline entries, in order, unique."""
-    out: List[Tuple[str, List[str]]] = []
+    """(speaker, spelling variants) of the outline entries, in order, unique.
+
+    WP-F9: for a machine transcript the variants also include spellings the
+    TRANSCRIPT uses for that speaker in a roll call or an introduction
+    ("Harsha" for the outline's "Archer", E3c) — see names.py."""
+    info = speaker_info(plan)
+    return [(sp, list(var)) for sp, var in info["variants"].items()]
+
+
+def speaker_info(plan: Plan) -> dict:
+    """{"variants": {speaker: [variants]}, "preferred": {speaker: spelling},
+    "found": {speaker: [(variant, how)]}} — computed once per plan."""
+    cached = getattr(plan, "_speaker_info", None)
+    if cached is not None:
+        return cached
     entries = plan.outline.entries if plan.outline is not None and plan.outline.entries else []
+    order: List[Tuple[str, List[str], float]] = []
     for e in entries:
-        if e.speaker and all(e.speaker != s for s, _ in out):
-            out.append((e.speaker, list(e.speaker_variants or [])))
-    return out
+        if e.speaker and all(e.speaker != sp for sp, _, _ in order):
+            order.append((e.speaker, list(e.speaker_variants or []), float(e.start_s)))
+    variants = {sp: list(var) for sp, var, _ in order}
+    preferred: Dict[str, str] = {}
+    found: Dict[str, list] = {}
+    if order and names.is_machine(plan.provenance) and plan.segments:
+        vocab = names.TranscriptVocab.build(plan.segments)
+        found = names.transcript_speaker_variants(order, plan.segments, vocab)
+        for sp, extra in found.items():
+            for w, _ in extra:
+                if w not in variants[sp]:
+                    variants[sp].append(w)
+            best = names.preferred_spelling(sp, variants[sp], vocab)
+            if best != sp:
+                preferred[sp] = best
+    info = {"variants": variants, "preferred": preferred,
+            "found": {k: v for k, v in found.items() if v}}
+    try:
+        plan._speaker_info = info
+    except Exception:  # noqa: BLE001 - a frozen plan just recomputes
+        pass
+    return info
 
 
 def _asr_names(plan: Plan) -> bool:
@@ -1362,10 +1445,12 @@ def display_title(plan: Plan, title: str) -> str:
     speakers = [s for s, _ in outline_speakers(plan)]
     if not speakers:
         return title
-    return names.hedge_title(title, speakers, names.metadata_words(plan.meta))
+    return names.hedge_title(title, speakers, names.metadata_words(plan.meta),
+                             preferred=speaker_info(plan)["preferred"])
 
 
-def _merge_uncertainty(plan: Plan, notes_by_key: Dict[str, str]) -> Tuple[str, dict]:
+def _merge_uncertainty(plan: Plan, notes_by_key: Dict[str, str],
+                       private: Sequence[str] = ()) -> Tuple[str, dict]:
     items: Dict[Tuple[str, str], dict] = {}
     omitted = known = 0
     asr = _asr_names(plan)
@@ -1411,10 +1496,14 @@ def _merge_uncertainty(plan: Plan, notes_by_key: Dict[str, str]) -> Tuple[str, d
         out += ["", "> " + "; ".join(notes) + "."]
     name_rows: List[names.NameRow] = []
     if asr:
+        info = speaker_info(plan)
         name_rows = names.names_rows(
             speakers=outline_speakers(plan),
             notes=[chapter_body(notes_by_key[p.key], 3) for p in plan.passages],
-            respellings=respellings, vocab=vocab, meta_words=meta_words)
+            respellings=respellings, vocab=vocab, meta_words=meta_words,
+            found=info["found"])
+        # WP-F9: private individuals are not listed (they are not named at all).
+        name_rows = [r for r in name_rows if r.name not in private]
         block = names.render_names(name_rows, plan.provenance_label)
         if block:
             out += ["", block.rstrip("\n")]
@@ -1557,15 +1646,37 @@ def assemble(plan: Plan, notes_by_key: Dict[str, str], course_map_md: str,
     as_of = notes_format.resolve_as_of(plan.meta)
     recorded = spoken_dates.estimate_event(plan.segments, as_of.date, as_of.basis)
     blocks = [_source_block(plan, models, partial, audit, recorded), course_map_md]
+    # WP-F9 names/privacy (machine transcripts only): people named only in
+    # giveaway/winner/attendee context are private — redacted, not listed;
+    # every other ASR-only name in the notes is hedged at its first mention
+    # in each chapter and listed in the names table.
+    private: List[str] = []
+    hedge: List[str] = []
+    if _asr_names(plan):
+        vocab = names.TranscriptVocab.build(plan.segments)
+        meta_words = names.metadata_words(plan.meta)
+        bodies = [chapter_body(notes_by_key[p.key], 3) for p in plan.passages]
+        found = names.note_names(bodies, vocab, meta_words)
+        protected = [sp for sp, var in outline_speakers(plan)] + [
+            v for _, var in outline_speakers(plan) for v in var]
+        private = names.private_names(bodies, found, protected)
+        hedge = [n for n in found if n not in private]
+    uncertainty_md, uncertainty_info = _merge_uncertainty(plan, notes_by_key, private)
+    hedged_total = 0
     for ch in plan.selected:
         blocks.append(f"## {display_title(plan, ch[0].title)} [{_chapter_range(ch)}]\n")
+        chapter_blocks = []
         if len(ch) == 1:
-            blocks.append(chapter_body(notes_by_key[ch[0].key], 3))
+            chapter_blocks.append(chapter_body(notes_by_key[ch[0].key], 3))
         else:
             for p in ch:
-                blocks.append(f"### Part {p.part}/{p.parts} [{p.range}]\n")
-                blocks.append(chapter_body(notes_by_key[p.key], 4))
-    uncertainty_md, uncertainty_info = _merge_uncertainty(plan, notes_by_key)
+                chapter_blocks.append(f"### Part {p.part}/{p.parts} [{p.range}]\n")
+                chapter_blocks.append(chapter_body(notes_by_key[p.key], 4))
+        text = "\n".join(b.rstrip() + "\n" for b in chapter_blocks)
+        if hedge:
+            text, n = names.hedge_names_in_body(text, hedge)
+            hedged_total += n
+        blocks.append(text)
     blocks.append(uncertainty_md)
     blocks.append(_merge_fact_checked(plan, notes_by_key))
     body = "\n".join(b.rstrip() + "\n" for b in blocks)
@@ -1574,6 +1685,9 @@ def assemble(plan: Plan, notes_by_key: Dict[str, str], course_map_md: str,
     body, normalized = citations.normalize_citation_commentary(
         body, citations.caption_validator([s.start for s in plan.segments]))
     body = citations.normalize_citation_markers(body)[0]
+    redactions: List[dict] = []
+    if private:
+        body, redactions = names.redact_private(body, private)
 
     # Time-sensitive claims: merge -> validate(fill) -> stamp. validate MUST
     # come first: a model row without a date fails P5 otherwise.
@@ -1604,6 +1718,9 @@ def assemble(plan: Plan, notes_by_key: Dict[str, str], course_map_md: str,
     )
     final = notes_format.stamp_notes(body, fm, check.rows)
     info = {
+        "names": {"hedged_in_body": hedged_total, "private_redacted": redactions,
+                  "speaker_variants_from_transcript": speaker_info(plan)["found"],
+                  "heading_spelling": speaker_info(plan)["preferred"]},
         "uncertainty": uncertainty_info,
         "time_sensitive_rows": len(check.rows),
         "time_sensitive_dropped": ts_dropped,

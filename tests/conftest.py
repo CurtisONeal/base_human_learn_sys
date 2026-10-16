@@ -12,8 +12,10 @@ def _isolated_cost_ledger(tmp_path):
     against the operator's real budget cap.
     """
     saved = (settings.cost_ledger_path, settings.metered_usd_cap,
-             dict(settings.provider_usd_caps), settings.allow_metered_fallback)
+             dict(settings.provider_usd_caps), settings.allow_metered_fallback,
+             settings.allow_anthropic_api)
     settings.cost_ledger_path = tmp_path / "_cost_ledger.json"
     yield settings.cost_ledger_path
     (settings.cost_ledger_path, settings.metered_usd_cap,
-     settings.provider_usd_caps, settings.allow_metered_fallback) = saved
+     settings.provider_usd_caps, settings.allow_metered_fallback,
+     settings.allow_anthropic_api) = saved

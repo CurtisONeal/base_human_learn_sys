@@ -179,7 +179,8 @@ def test_batched_map_makes_one_themes_call_over_candidates_only(small_run, tmp_p
     assert "### Candidate themes" in batch_system
     notes = result.summary_path.read_text()
     block = notes.split("### Cross-chapter themes", 1)[1].split("\n## ", 1)[0]
-    assert "- Agent SDK compared with the Anthropic SDK (ch. 1, 2, 3)" in block
+    # Tagged on 3 of 3 chapters -> shown as "(all chapters)" (WP-F9 (m)).
+    assert "- Agent SDK compared with the Anthropic SDK (all chapters)" in block
     assert block.count("Anthropic SDK") == 1
     assert result.course_map_calls == 4
 
@@ -306,11 +307,15 @@ def test_e3_historical_years_give_no_estimate():
     assert sd.estimate_recording(s, dt.date(2026, 10, 15), "captured") is None
 
 
-def test_single_unanchored_mention_is_not_enough_but_two_clustered_are():
+def test_unanchored_mentions_are_never_enough():
+    # WP-F9 (k): the old ">= 2 clustered unanchored" path is gone; history
+    # told twice is not a recording date.
     one = segs((10, "the conference on March 3rd was fun"))
     assert sd.estimate_recording(one, dt.date(2026, 7, 20)) is None
     two = one + segs((900, "and on March 10th they shipped it"))
-    est = sd.estimate_recording(two, dt.date(2026, 7, 20))
+    assert sd.estimate_recording(two, dt.date(2026, 7, 20)) is None
+    anchored = two + segs((950, "and right now, March 12th, we are recording this"))
+    est = sd.estimate_recording(anchored, dt.date(2026, 7, 20))
     assert est is not None and est.month == "2026-03"
 
 

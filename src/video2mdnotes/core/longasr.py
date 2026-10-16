@@ -9,14 +9,16 @@ minute 70 from one that covered the recording. This module instead:
 1. probes each source file (camera-split parts of one recording, in filename
    order) and lays them on one timeline with cumulative offsets;
 2. cuts each file into windows of `window_s` seconds plus `overlap_s` of
-   look-ahead, extracts ONE window at a time to a temp 16 kHz mono wav with
+   look-behind AND look-ahead (symmetric, so a sentence crossing a seam is
+   heard whole by one window), extracts ONE window at a time to a temp 16 kHz mono wav with
    ffmpeg (`-ss start -t dur -i src -vn -ac 1 -ar 16000`), transcribes it,
    writes `asr/<file>_<window>.json` atomically, and deletes the wav — so no
-   temp audio file is ever longer than `window_s + overlap_s`, and a rerun
+   temp audio file is ever longer than `window_s + 2*overlap_s`, and a rerun
    skips every window already checkpointed;
 3. shifts segments onto the timeline, de-duplicates the overlap between
    neighbouring windows (keeping the copy further from its window's edge,
-   where the engine had context on both sides), and
+   where the engine had context on both sides, and never dropping a copy
+   that alone holds some speech), and
 4. runs a completeness gate — audio coverage, transcribed span, longest
    unexplained gap, every window checkpointed — that fails loudly. A window
    with no speech is recorded as SILENT (ffmpeg silencedetect), never as
@@ -86,8 +88,11 @@ class Window:
     """One extraction window. Times are seconds from the start of its FILE.
 
     [ext_start, ext_end) is what gets extracted; [core_start, core_end) is the
-    window's own share of the file. ext_end - core_end is the look-ahead
-    overlap into the next window (zero for a file's last window).
+    window's own share of the file. The overlap is SYMMETRIC: core_start -
+    ext_start is the look-behind into the previous window and ext_end -
+    core_end the look-ahead into the next (each zero at a file edge), so a
+    sentence crossing a seam is heard whole by at least one window unless it
+    is longer than the overlap itself.
     """
 
     file_idx: int
@@ -108,10 +113,12 @@ class Window:
 
 def plan_windows(duration_s: float, window_s: float, overlap_s: float,
                  file_idx: int = 0) -> List[Window]:
-    """Windows covering [0, duration_s). Each is at most window_s + overlap_s.
+    """Windows covering [0, duration_s). Each is at most window_s + 2*overlap_s.
 
     A tail shorter than the overlap is absorbed by the previous window (its
     look-ahead already reaches the end), so no redundant sliver window exists.
+    A duration of 0 (unknown) plans nothing — callers must measure it first
+    (`transcribe_long` does; it never falls back to a whole-file decode).
     """
     if window_s <= 0:
         raise ValueError("window_s must be > 0")
@@ -122,11 +129,12 @@ def plan_windows(duration_s: float, window_s: float, overlap_s: float,
     duration_s = max(0.0, float(duration_s))
     while start < duration_s:
         core_end = min(start + window_s, duration_s)
+        ext_start = max(0.0, start - overlap_s)
         ext_end = min(core_end + overlap_s, duration_s)
         if ext_end >= duration_s:
-            out.append(Window(file_idx, k, start, duration_s, start, duration_s))
+            out.append(Window(file_idx, k, ext_start, duration_s, start, duration_s))
             break
-        out.append(Window(file_idx, k, start, ext_end, start, core_end))
+        out.append(Window(file_idx, k, ext_start, ext_end, start, core_end))
         start, k = core_end, k + 1
     return out
 
@@ -306,28 +314,105 @@ def _dur(s: Segment) -> float:
     return max(0.0, s.end - s.start)
 
 
+# A dropped copy may leave at most this much of its own span uncovered by the
+# other window's segments; more than that is speech only it heard.
+COVER_TOLERANCE_S = 1.0
+
+
+def _union(segs: Sequence[Segment]) -> List[Tuple[float, float]]:
+    out: List[Tuple[float, float]] = []
+    for s in sorted(segs, key=lambda x: x.start):
+        if out and s.start <= out[-1][1]:
+            out[-1] = (out[-1][0], max(out[-1][1], s.end))
+        else:
+            out.append((s.start, s.end))
+    return out
+
+
+def _uncovered(seg: Segment, covered: Sequence[Tuple[float, float]]) -> float:
+    return _dur(seg) - _overlap_len(seg.start, seg.end, covered)
+
+
+def _timed_words(seg: Segment) -> Optional[List[Word]]:
+    """The segment's word timings, only if they spell its text."""
+    if not seg.words:
+        return None
+    if "".join(w.text for w in seg.words).split() != seg.text.split():
+        return None
+    return list(seg.words)
+
+
+def _from_words(words: Sequence[Word]) -> Optional[Segment]:
+    words = [w for w in words if w.text.strip()]
+    if not words:
+        return None
+    return Segment(start=words[0].start, end=max(w.end for w in words),
+                   text="".join(w.text for w in words), words=list(words))
+
+
+def _mid(w: Word) -> float:
+    return (w.start + w.end) / 2
+
+
+def _trim_uncovered(seg: Segment, covered: Sequence[Tuple[float, float]]) -> Optional[Segment]:
+    """The words of `seg` that lie outside `covered` (by word midpoint)."""
+    words = _timed_words(seg)
+    if words is None:
+        return None
+    keep = [w for w in words if _overlap_len(_mid(w), _mid(w) + 1e-6, covered) == 0]
+    return _from_words(keep)
+
+
 def dedupe_overlap(prev: List[Segment], prev_ext_end: float,
-                   nxt: List[Segment], nxt_ext_start: float) -> Tuple[List[Segment], List[Segment]]:
+                   nxt: List[Segment], nxt_ext_start: float,
+                   seam: Optional[float] = None) -> Tuple[List[Segment], List[Segment]]:
     """Remove duplicate speech between two neighbouring windows.
 
     All times absolute. Only segments inside the shared region
-    [nxt_ext_start, prev_ext_end) can conflict. Two segments are the same
-    speech when they overlap in time by >= half of the shorter one; the copy
-    kept is the one further from its own window's edge (prev's end edge /
-    nxt's start edge), because a segment cut by an edge is the truncated one.
-    Non-conflicting segments are always kept — nothing is dropped unless a
-    better copy of it exists.
+    [nxt_ext_start, prev_ext_end) can conflict; `seam` is the boundary between
+    the two windows' own shares (default: the middle of the shared region).
+    Two segments are the same speech when they overlap in time by >= half of
+    the shorter one. The preferred loser is the copy cut by its window edge
+    (prev's end edge / nxt's start edge), else the one nearer its edge.
+
+    Invariant: a copy is never dropped while it holds speech the other window
+    does not — its span must be covered by the other window's segments to
+    within COVER_TOLERANCE_S. Otherwise it is trimmed to its uncovered words
+    (when it carries word timings) or, failing that, kept: a duplicated phrase
+    is recoverable by a reader, a lost one is not. When BOTH copies are cut by
+    their edges (a sentence longer than the overlap), each keeps its words on
+    its own side of the seam.
     """
     if not prev or not nxt or prev_ext_end <= nxt_ext_start:
         return prev, nxt
-    drop_p, drop_n = set(), set()
-    for i, a in enumerate(prev):
-        if a.end <= nxt_ext_start:
-            continue
-        for j, b in enumerate(nxt):
-            if i in drop_p:
+    if seam is None:
+        seam = (prev_ext_end + nxt_ext_start) / 2
+    p, n = list(prev), list(nxt)
+    gone_p, gone_n = set(), set()
+
+    def alive(segs, gone):
+        return [s for k, s in enumerate(segs) if k not in gone and s is not None]
+
+    def resolve(segs, gone, k, other_segs, other_gone) -> None:
+        """Drop or trim segs[k] against the other window's living copies."""
+        covered = _union(alive(other_segs, other_gone))
+        seg = segs[k]
+        if _uncovered(seg, covered) <= COVER_TOLERANCE_S:
+            gone.add(k)
+            return
+        trimmed = _trim_uncovered(seg, covered)
+        if trimmed is not None:
+            segs[k] = trimmed
+        # else: keep the whole copy (it alone holds some speech)
+
+    for i in range(len(p)):
+        for j in range(len(n)):
+            if i in gone_p:
                 break
-            if j in drop_n or b.start >= prev_ext_end:
+            if j in gone_n:
+                continue
+            a, b = p[i], n[j]
+            if a.end <= nxt_ext_start or b.start >= prev_ext_end:
                 continue
             inter = min(a.end, b.end) - max(a.start, b.start)
             shorter = min(_dur(a), _dur(b))
@@ -335,28 +420,38 @@ def dedupe_overlap(prev: List[Segment], prev_ext_end: float,
                 shorter == 0 and abs(a.start - b.start) < 0.5)
             if not same:
                 continue
-            # A segment touching its window edge was cut by it. Measured on
-            # the E3 meetup at 1500 s: prev's last sentence ran to the edge
-            # (1499.5-1508.0, clipped) and swallowed words that next's NEXT
-            # segment also holds; next's copy started exactly at its edge
-            # too. Both distances were 0 and keeping prev duplicated a phrase.
-            # So: a clipped copy loses to an unclipped one, and when both are
-            # clipped prev's loses — the next window re-heard its tail with
-            # context, and the stretch it alone covers is < its look-behind.
             clipped_a = a.end >= prev_ext_end - EDGE_EPS_S
             clipped_b = b.start <= nxt_ext_start + EDGE_EPS_S
+            if clipped_a and clipped_b:
+                wa, wb = _timed_words(a), _timed_words(b)
+                if wa is not None and wb is not None:
+                    # Each window keeps its own side of the seam.
+                    ta = _from_words([w for w in wa if _mid(w) < seam])
+                    tb = _from_words([w for w in wb if _mid(w) >= seam])
+                    if ta is None:
+                        gone_p.add(i)
+                    else:
+                        p[i] = ta
+                    if tb is None:
+                        gone_n.add(j)
+                    else:
+                        n[j] = tb
+                    continue
+                # No timings: drop whichever copy the other fully covers.
+                if _uncovered(a, _union(alive(n, gone_n))) <= COVER_TOLERANCE_S:
+                    gone_p.add(i)
+                elif _uncovered(b, _union(alive(p, gone_p))) <= COVER_TOLERANCE_S:
+                    gone_n.add(j)
+                continue
             if clipped_a != clipped_b:
                 drop_prev = clipped_a
-            elif clipped_a:
-                drop_prev = True
             else:
                 drop_prev = (prev_ext_end - a.end) < (b.start - nxt_ext_start)
             if drop_prev:
-                drop_p.add(i)
+                resolve(p, gone_p, i, n, gone_n)
             else:
-                drop_n.add(j)
-    return ([s for i, s in enumerate(prev) if i not in drop_p],
-            [s for j, s in enumerate(nxt) if j not in drop_n])
+                resolve(n, gone_n, j, p, gone_p)
+    return alive(p, gone_p), alive(n, gone_n)
 
 
 # --- checkpoints -------------------------------------------------------------
@@ -442,6 +537,70 @@ def _run_window(part: Part, w: Window, backend: AsrBackend, tmp_dir: Path,
     return actual, segs, silences, timings
 
 
+def ensure_durations(infos: Sequence, progress: Progress = print) -> List:
+    """Every info with a known duration, measuring the ones that lack it.
+
+    `probe()` reports 0 when ffmpeg prints no `Duration:` (truncated camera
+    files). Zero must never mean "short, decode it whole": the duration is
+    measured by decoding to the null muxer (no audio file written), and a
+    file that still yields none is refused with a clear error.
+    """
+    from video2mdnotes.core.media import UnreadableMediaError, measure_duration
+
+    out = []
+    for info in infos:
+        if not float(getattr(info, "duration_seconds", 0) or 0) > 0:
+            progress(f"{Path(info.path).name}: container reports no duration; "
+                     "measuring by decoding to EOF (nothing written)")
+            measured = measure_duration(Path(info.path))
+            if not measured > 0:
+                raise UnreadableMediaError(
+                    f"{Path(info.path).name}: duration unknown and no audio could be "
+                    "decoded to measure it; refusing to transcribe (windows cannot "
+                    "be planned and a whole-file decode is never used)")
+            info.duration_seconds = measured
+        out.append(info)
+    return out
+
+
+def transcribe_media(
+    sources: Sequence[Path],
+    *,
+    run_dir: Path,
+    title: Optional[str] = None,
+    metadata_text: str = "",
+    initial_prompt: Optional[str] = None,
+    infos: Optional[Sequence] = None,
+    spec: Optional[str] = None,
+    progress: Progress = print,
+) -> LongTranscript:
+    """THE local-audio transcription path: every media file and every
+    downloaded audio track goes through windowed ASR (a short clip is simply
+    one window), with checkpoints and the completeness gate. There is no
+    whole-file-wav path to fall back to."""
+    from video2mdnotes.config import settings
+
+    language = getattr(settings, "fw_lang", None)
+    backend, why = select_backend(metadata_text=metadata_text or (title or ""),
+                                  language=language, spec=spec)
+    progress(f"Windowed ASR: {backend.name}:{backend.model} ({why})")
+    return transcribe_long(
+        sources, backend,
+        run_dir=run_dir,
+        window_s=settings.asr_window_s,
+        overlap_s=settings.asr_overlap_s,
+        initial_prompt=initial_prompt or None,
+        language=language if language and language != "auto" else None,
+        title=title,
+        max_gap_s=settings.asr_max_gap_s,
+        min_coverage=settings.asr_min_coverage,
+        silence_db=settings.asr_silence_db,
+        infos=infos,
+        backend_reason=why,
+        progress=progress,
+    )
+
+
 def transcribe_long(
     sources: Sequence[Path],
     backend: AsrBackend,
@@ -474,6 +633,7 @@ def transcribe_long(
     tmp_dir = Path(tmp_dir) if tmp_dir else asr_dir / "tmp"
     if infos is None:
         infos = [probe(Path(s)) for s in sources]
+    infos = ensure_durations(infos, progress)
     parts = parts_from_infos(infos)
     total = sum(p.duration_s for p in parts)
     label = provenance_label(backend)
@@ -641,7 +801,7 @@ def stitch(records: Sequence[Tuple[Part, Window, dict]]) -> List[Segment]:
         if prev is not None and prev[1].index == part.index:
             pw, pp, psegs = prev
             kept_prev, segs = dedupe_overlap(psegs, pp.offset_s + pw.ext_end,
-                                             segs, base)
+                                             segs, base, seam=pp.offset_s + pw.core_end)
             out.extend(kept_prev)
         elif prev is not None:
             out.extend(prev[2])

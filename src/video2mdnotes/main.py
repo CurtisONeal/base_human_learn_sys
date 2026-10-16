@@ -13,7 +13,7 @@ from rich.panel import Panel
 from video2mdnotes.config import settings
 from video2mdnotes.logger import logger
 from video2mdnotes.core.downloader import DownloadResult, fetch_audio, probe_source
-from video2mdnotes.core.transcriber import transcribe_audio, build_initial_prompt
+from video2mdnotes.core.transcriber import build_initial_prompt
 from video2mdnotes.core.summarizer import (
     EMPTY_TRANSCRIPT_PLACEHOLDER,
     BudgetExhausted,
@@ -217,6 +217,9 @@ def _longform_waiting(run_dir: Path, **kwargs):
             if _resolve_exhaustion_policy() != "wait":
                 raise
             _wait_for_reset(exc)
+            # A fresh run (--no-resume) only needs to be fresh once: the
+            # retry must keep the passages finished before the wait.
+            kwargs["resume"] = True
 
 
 def _summarize_transcript(transcript, project_dir: Path):
@@ -310,7 +313,6 @@ def media(
     probe_only: bool = typer.Option(
         False, "--probe", help="Report format, duration and codec. Free — no transcription."
     ),
-    keep_wav: bool = typer.Option(False, "--keep-wav", help="Keep the converted 16kHz wav (short files only)"),
     on_exhaustion: str = typer.Option(None, "--on-exhaustion"),
     group: bool = typer.Option(
         False, "--group", help="Treat ALL given files as ordered parts of ONE recording (filename order)"
@@ -339,17 +341,19 @@ def media(
     writes ADPCM into a .wav is common, and trusting the extension is how those
     files get silently mishandled.
 
-    Recordings longer than ASR_LONG_THRESHOLD_S (20 min), and camera-split
-    multi-part recordings, are transcribed in bounded windows with per-window
-    checkpoints and a completeness gate (core/longasr.py) — never converted
-    whole to one wav. Re-running resumes from the checkpoints.
+    Every recording — a 12 s clip is one window — is transcribed in bounded
+    windows with per-window checkpoints and a completeness gate
+    (core/longasr.py), never converted whole to one wav; camera-split parts
+    are joined on one timeline. Re-running resumes from the checkpoints.
+    Inputs under /Volumes (SD cards, recorders) are refused: work from a
+    verified safety copy.
 
         media ~/Recordings --probe        # what have I actually got?
         media ~/Recordings/meeting.m4a
         media part1.MOV part2.MOV --group --transcribe-only --out runs/meetup
     """
     from video2mdnotes.core.media import (
-        MediaError, describe, find_media, probe as probe_media, to_wav,
+        MediaError, describe, find_media, probe as probe_media, refuse_removable,
     )
     from video2mdnotes.core.metadata import from_local_group, from_local_media
     from video2mdnotes.core.downloader import sanitize_filename
@@ -362,6 +366,11 @@ def media(
     files: list = []
     for raw in paths:
         target = Path(raw).expanduser()
+        try:
+            refuse_removable(target)
+        except MediaError as exc:
+            console.print(f"[red]Refused:[/red] {exc}")
+            raise typer.Exit(2)
         if not target.exists():
             console.print(f"[red]No such path:[/red] {target}")
             raise typer.Exit(1)
@@ -411,7 +420,6 @@ def media(
     for unit in units:
         first, last = unit[0], unit[-1]
         total_s = sum(float(i.duration_seconds or 0.0) for i in unit)
-        is_long = len(unit) > 1 or total_s > settings.asr_long_threshold_s
         if title and len(units) == 1:
             unit_title = title
         elif len(unit) == 1:
@@ -434,63 +442,52 @@ def media(
             skipped += 1
             continue
 
-        if is_long:
+        try:
+            unit = longasr.ensure_durations(
+                unit, progress=lambda msg: console.print(f"      [dim]{msg}[/dim]"))
+        except MediaError as exc:
+            console.print(f"      [red]Transcription failed:[/red] {exc}")
+            failed += 1
+            continue
+        if len(unit) > 1:
             from_local_group(unit, title=unit_title).write(project_dir)
-            try:
-                backend, why = longasr.select_backend(
-                    metadata_text=unit_title, language=settings.fw_lang, spec=asr_backend)
-                console.print(f"      [dim]Long recording → windowed ASR: "
-                              f"{backend.name}:{backend.model} ({why})[/dim]")
-                long = longasr.transcribe_long(
-                    [i.path for i in unit], backend,
-                    run_dir=project_dir,
-                    window_s=settings.asr_window_s,
-                    overlap_s=settings.asr_overlap_s,
-                    initial_prompt=title or None,
-                    language=settings.fw_lang if settings.fw_lang != "auto" else None,
-                    title=unit_title,
-                    max_gap_s=settings.asr_max_gap_s,
-                    min_coverage=settings.asr_min_coverage,
-                    silence_db=settings.asr_silence_db,
-                    infos=unit,
-                    backend_reason=why,
-                    progress=lambda msg: console.print(f"      [dim]{msg}[/dim]"),
-                )
-            except longasr.AsrIncomplete as exc:
-                console.print(f"      [red]Incomplete transcript — not written:[/red] {exc}")
-                console.print(f"      [dim]See {project_dir / longasr.MANIFEST_FILENAME}; "
-                              "re-run to resume from checkpoints.[/dim]")
-                failed += 1
-                continue
-            except (BackendUnavailable, ValueError, MediaError) as exc:
-                console.print(f"      [red]Transcription failed:[/red] {exc}")
-                failed += 1
-                continue
-            transcript = long.result
-            gate = long.gate
-            console.print(f"      [green]Completeness gate PASS[/green] · coverage "
-                          f"{gate['audio_coverage']:.2%} · span {gate['span_ratio']:.2%} · "
-                          f"max gap {gate['max_gap_s']:.0f}s "
-                          f"(unexplained {gate['max_unexplained_gap_s']:.0f}s)")
         else:
-            from_local_media(first, title=first.path.stem).write(project_dir)
-            wav_path = project_dir / "audio" / f"{safe_title}.wav"
-            try:
-                to_wav(first.path, wav_path, first)
-            except MediaError as exc:
-                console.print(f"      [red]Conversion failed:[/red] {exc}")
-                failed += 1
-                continue
-            try:
-                transcript = transcribe_audio(wav_path, title=first.path.stem)
-            except Exception as exc:  # noqa: BLE001
-                console.print(f"      [red]Transcription failed:[/red] {exc}")
-                logger.error(f"{first.path.name}: {exc}")
-                failed += 1
-                continue
-            finally:
-                if not keep_wav:
-                    wav_path.unlink(missing_ok=True)
+            from_local_media(first, title=unit_title).write(project_dir)
+        # One path for every local recording: bounded windows, checkpoints and
+        # the completeness gate. A short clip is one window; nothing is ever
+        # decoded whole to a single wav.
+        try:
+            long = longasr.transcribe_media(
+                [i.path for i in unit],
+                run_dir=project_dir,
+                title=unit_title,
+                metadata_text=unit_title,
+                initial_prompt=title or None,
+                infos=unit,
+                spec=asr_backend,
+                progress=lambda msg: console.print(f"      [dim]{msg}[/dim]"),
+            )
+        except longasr.AsrIncomplete as exc:
+            console.print(f"      [red]Incomplete transcript — not written:[/red] {exc}")
+            console.print(f"      [dim]See {project_dir / longasr.MANIFEST_FILENAME}; "
+                          "re-run to resume from checkpoints.[/dim]")
+            failed += 1
+            continue
+        except (BackendUnavailable, ValueError, MediaError) as exc:
+            console.print(f"      [red]Transcription failed:[/red] {exc}")
+            failed += 1
+            continue
+        except Exception as exc:  # noqa: BLE001 — one bad file never stops the batch
+            console.print(f"      [red]Transcription failed:[/red] {exc}")
+            logger.error(f"{first.path.name}: {exc}")
+            failed += 1
+            continue
+        transcript = long.result
+        gate = long.gate
+        console.print(f"      [green]Completeness gate PASS[/green] · coverage "
+                      f"{gate['audio_coverage']:.2%} · span {gate['span_ratio']:.2%} · "
+                      f"max gap {gate['max_gap_s']:.0f}s "
+                      f"(unexplained {gate['max_unexplained_gap_s']:.0f}s)")
 
         # The transcript is the expensive artifact — write it BEFORE
         # summarizing, so a summarizer failure never costs the transcription.
@@ -949,6 +946,14 @@ def process(
     # before anything else — an existing path is unambiguous, unlike a URL,
     # which has to be TRIED against yt-dlp to find out what it is.
     local_path = Path(url).expanduser()
+    if str(local_path).startswith("/Volumes/") or (
+            local_path.exists() and str(local_path.resolve()).startswith("/Volumes/")):
+        from video2mdnotes.core.media import MediaError, refuse_removable
+        try:
+            refuse_removable(local_path)
+        except MediaError as exc:
+            console.print(f"[red]Refused:[/red] {exc}")
+            raise typer.Exit(2)
     if local_path.exists() and local_path.is_file():
         from video2mdnotes.core.documents import SUPPORTED as _DOC_SUPPORTED, extract as extract_document
         if local_path.suffix.lower() not in _DOC_SUPPORTED:
@@ -1062,19 +1067,34 @@ def process(
                         "(auto-captions are ASR without our vocabulary hint)."
                     )
 
+            safe_title = sanitize_filename(source.title)
+            date_str = dt.date.today().strftime('%Y%m%d')
+            project_dir = project_root / f"{date_str}_{safe_title}"
+
             audio_path = None
             if transcript_result is None:
-                audio_path = fetch_audio(source)
+                # No usable captions: windowed ASR over the NATIVE downloaded
+                # audio (bounded windows, checkpoints in project_dir/asr, the
+                # completeness gate) — the same path as `media`; never one
+                # whole-file wav and one unbounded ASR call.
+                from video2mdnotes.core import longasr
+                audio_path = fetch_audio(source, convert=False)
                 initial_prompt = build_initial_prompt(
                     title=source.title,
                     tags=source.tags,
                     description=source.description
                 )
-                transcript_result = transcribe_audio(
-                    audio_path,
+                long = longasr.transcribe_media(
+                    [audio_path],
+                    run_dir=project_dir,
                     title=source.title,
-                    initial_prompt=initial_prompt
+                    metadata_text=" ".join(
+                        [source.title or "", source.description or "",
+                         " ".join(source.tags or [])]),
+                    initial_prompt=initial_prompt,
+                    progress=lambda msg: logger.info(msg),
                 )
+                transcript_result = long.result
 
             download_result = DownloadResult(
                 audio_path=audio_path,
@@ -1095,9 +1115,6 @@ def process(
             # re-transcription on retry. Writing here also makes the transcript
             # a durable artifact that can be re-summarized with a different
             # prompt without touching the audio again.
-            safe_title = sanitize_filename(source.title)
-            date_str = dt.date.today().strftime('%Y%m%d')
-            project_dir = project_root / f"{date_str}_{safe_title}"
             (project_dir / "transcripts").mkdir(parents=True, exist_ok=True)
             transcript_path = project_dir / "transcripts" / f"{safe_title}.md"
             transcript_path.write_text(

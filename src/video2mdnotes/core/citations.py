@@ -258,6 +258,19 @@ _COMMENT_OUTSIDE_RE = re.compile(
     rf"(?(open)\s*\))",
     re.I)
 _TS_ONLY_RE = re.compile(_TS)
+# Any other commentary INSIDE a citation's brackets (E2c, WP-F9):
+#   "[8:58:25 is not used — see below]", "[9:37:41 not used]"
+# A timestamp followed by words in the same brackets is never a valid
+# citation; it collapses to the timestamp, which the audit then judges like
+# any other. Ranges ("[1:00:05–1:00:09]", "[1:00 to 1:05]") are not commentary.
+_RANGE_TAIL = re.compile(rf"^\s*(?:-|–|—|to)\s*{_TS}\s*$", re.I)
+_COMMENT_GENERIC_RE = re.compile(
+    rf"\[(?P<bad>{_TS})\s*[,;:—–-]?\s+(?P<comment>[^\[\]\n]{{1,120}}?)\s*\]")
+# A dangling cross-reference with no target after a citation:
+#   "[8:58:25] — see below", "[1:02:03] (see above)"
+_SEE_DANGLING_RE = re.compile(
+    rf"(?P<cite>\[{_TS}\])\s*(?:[—–-]+|,|;)?\s*\(?\s*see\s+(?:below|above|later|earlier|next)\b\s*\)?",
+    re.I)
 
 
 def _short(ts: str) -> str:
@@ -302,6 +315,38 @@ def normalize_citation_commentary(text: str, valid=None) -> Tuple[str, List[dict
 
     out = _COMMENT_INSIDE_RE.sub(sub, text or "")
     out = _COMMENT_OUTSIDE_RE.sub(sub, out)
+
+    def generic(m):
+        comment = m.group("comment")
+        if _RANGE_TAIL.match(comment) or not re.search(r"[A-Za-z]{2}", comment):
+            return m.group(0)
+        bad = _short(m.group("bad"))
+        # Every timestamp in the brackets is a citation the model meant
+        # ("[8:12:35 area, 7:50:35]" -> both); keep the valid ones.
+        cands = [bad] + [t for t in (_short(x) for x in _TS_ONLY_RE.findall(comment))
+                         if t != bad]
+        chosen = [t for t in cands if valid is None or valid(_parse_ts(t))] or [bad]
+        new = " ".join(f"[{t}]" for t in chosen)
+        entries.append({
+            "rule": "citation:normalized", "changed": True,
+            "original": m.group(0), "new": new,
+            "original_ts": bad, "new_ts": ", ".join(chosen),
+            "claim": "commentary inside a citation's brackets removed",
+        })
+        return new
+
+    out = _COMMENT_GENERIC_RE.sub(generic, out)
+
+    def dangling(m):
+        entries.append({
+            "rule": "citation:normalized", "changed": True,
+            "original": m.group(0), "new": m.group("cite"),
+            "original_ts": m.group("cite").strip("[]"), "new_ts": m.group("cite").strip("[]"),
+            "claim": "dangling 'see below/above' after a citation removed",
+        })
+        return m.group("cite")
+
+    out = _SEE_DANGLING_RE.sub(dangling, out)
     return out, entries
 
 

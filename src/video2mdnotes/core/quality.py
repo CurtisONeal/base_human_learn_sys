@@ -275,27 +275,63 @@ _COMMON = frozenset(
 )
 
 
-def metadata_terms(meta: Any) -> List[str]:
+# An acronym candidate whose lowercase form the transcript itself uses at
+# least this often, and more often than the cased form, is an ordinary word
+# shouted in a title ("FULL COURSE"), not a name.
+LOWERCASE_COMMON_MIN = 3
+
+
+def _identifier_shaped(letters: str, tok: str) -> bool:
+    """Acronym shapes a promo blurb does not produce: hyphenated (CCA-F) or
+    vowel-less (MCP, SDK). "CODE", "LIKE", "SAVE20" are not."""
+    if re.search(r"\d", tok):
+        return False
+    return "-" in tok or not re.search(r"[AEIOU]", letters)
+
+
+def metadata_terms(meta: Any, transcript_text: str = "") -> List[str]:
     """Distinctively-cased proper nouns from title/description/tags.
 
-    Only forms whose casing carries information: CamelCase (``ExamPro``,
-    ``freeCodeCamp``) and acronyms of 3+ letters (``CCA-F``). A plain
-    capitalised word ("Prepare", "Foundations") is title case, not evidence.
-    URLs and @handles are skipped.
+    Only forms whose casing carries information:
+    * CamelCase (``ExamPro``, ``freeCodeCamp``) from any field;
+    * acronyms of 3+ letters from the TITLE and TAGS; from the DESCRIPTION
+      only when identifier-shaped (hyphenated like ``CCA-F`` or vowel-less
+      like ``MCP``) — a description's shouted promo text ("LIKE AND
+      SUBSCRIBE, USE CODE SAVE20") is not a list of names (F9 review (i));
+    * never an acronym the transcript itself uses commonly in lowercase
+      ("full", "course", "code"): a casing rule for it would rewrite
+      ordinary words across the whole transcript.
+    A plain capitalised word ("Prepare", "Foundations") is title case, not
+    evidence. URLs and @handles are skipped.
     """
     title, description, tags = _meta_fields(meta)
-    text = "\n".join([title, description, "\n".join(tags)])
-    text = re.sub(r"https?://\S+|@\S+", " ", text)
+    lower_counts: dict = {}
+    cased_counts: dict = {}
+    if transcript_text:
+        for w in re.findall(r"[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*", transcript_text):
+            if w.islower():
+                lower_counts[w] = lower_counts.get(w, 0) + 1
+            else:
+                cased_counts[w] = cased_counts.get(w, 0) + 1
     found: List[str] = []
-    for tok in re.findall(r"[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*", text):
-        letters = re.sub(r"[^A-Za-z]", "", tok)
-        camel = bool(re.search(r"[a-z][A-Z]", tok))
-        acronym = len(letters) >= 3 and letters.isupper()
-        if not (camel or acronym):
-            continue
-        if tok.lower() in _COMMON or tok in found:
-            continue
-        found.append(tok)
+    fields = [("title", title), ("tags", "\n".join(tags)), ("description", description)]
+    for field_name, text in fields:
+        text = re.sub(r"https?://\S+|@\S+", " ", text)
+        for tok in re.findall(r"[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*", text):
+            letters = re.sub(r"[^A-Za-z]", "", tok)
+            camel = bool(re.search(r"[a-z][A-Z]", tok))
+            acronym = len(letters) >= 3 and letters.isupper()
+            if not (camel or acronym):
+                continue
+            if tok.lower() in _COMMON or tok in found:
+                continue
+            if acronym and not camel:
+                if field_name == "description" and not _identifier_shaped(letters, tok):
+                    continue
+                low = lower_counts.get(tok.lower(), 0)
+                if low >= LOWERCASE_COMMON_MIN and low > cased_counts.get(tok, 0):
+                    continue
+            found.append(tok)
     return found
 
 
@@ -317,8 +353,12 @@ def build_glossary(
     directory: Path = GLOSSARY_DIR,
     extra_domains: Sequence[dict] = (),
     include_casing: bool = True,
+    transcript_text: str = "",
 ) -> Glossary:
-    """Correction glossary for one source: selected domains + metadata casing."""
+    """Correction glossary for one source: selected domains + metadata casing.
+
+    `transcript_text` (the raw transcript) lets metadata casing skip
+    acronyms the speaker uses as ordinary lowercase words."""
     domains = list(select_domains(meta, directory)) + list(extra_domains)
     glossary = Glossary()
     seen_terms = set()
@@ -332,7 +372,7 @@ def build_glossary(
                 glossary.terms.append(term)
                 seen_terms.add(term)
     if include_casing:
-        terms = metadata_terms(meta)
+        terms = metadata_terms(meta, transcript_text)
         if terms:
             glossary.sources.append("metadata")
         for term in terms:

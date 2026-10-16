@@ -106,11 +106,14 @@ def _run(sources, backend, run_dir, **kw):
 def test_plan_windows_cover_file_and_bound_length():
     ws = longasr.plan_windows(50, W, OV)
     assert [(w.ext_start, w.ext_end, w.core_start, w.core_end) for w in ws] == [
-        (0, 24, 0, 20), (20, 44, 20, 40), (40, 50, 40, 50)]
+        (0, 24, 0, 20), (16, 44, 20, 40), (36, 50, 40, 50)]
     # cores tile the file exactly
     assert ws[0].core_start == 0 and ws[-1].core_end == 50
     assert all(a.core_end == b.core_start for a, b in zip(ws, ws[1:]))
-    assert all(w.expected_s <= W + OV for w in ws)
+    assert all(w.expected_s <= W + 2 * OV for w in ws)
+    # symmetric overlap: every inner seam is heard OV before and after
+    assert all(b.ext_start == a.core_end - OV and a.ext_end == a.core_end + OV
+               for a, b in zip(ws, ws[1:]))
 
 
 def test_plan_windows_tail_shorter_than_overlap_is_absorbed():
@@ -165,6 +168,63 @@ def test_dedupe_never_drops_unmatched_speech():
     assert len(p) == 1 and len(n) == 1
 
 
+def _worded(start, end, words):
+    """A segment with evenly spaced word timings."""
+    from video2mdnotes.core.transcriber import Word
+    step = (end - start) / len(words)
+    ws = [Word(start=start + k * step, end=start + (k + 1) * step, text=f" {w}")
+          for k, w in enumerate(words)]
+    return Segment(start=start, end=end, text="".join(w.text for w in ws), words=ws)
+
+
+def test_seam_sentence_cut_by_both_edges_loses_nothing():
+    # F9 review (a): seam at 1500, symmetric overlap 8 s -> prev extracted to
+    # 1508, next from 1492. One 30 s sentence 1485-1515 crosses BOTH edges:
+    # prev holds 1485-1508, next 1492-1515. Old code dropped prev's copy and
+    # with it 1485-1492, which only prev heard.
+    words = [f"w{k}" for k in range(30)]               # one word per second
+    full = _worded(1485, 1515, words)
+    prev = [_worded(1485, 1508, words[:23])]
+    nxt = [_worded(1492, 1515, words[7:])]
+    p, n = longasr.dedupe_overlap(prev, 1508.0, nxt, 1492.0, seam=1500.0)
+    got = " ".join(s.text for s in p + n).split()
+    assert got == full.text.split()                    # every word, once, in order
+    assert p and p[0].end <= 1500.0 + 1e-6 and n and n[0].start >= 1500.0 - 1e-6
+
+
+def test_seam_both_clipped_without_word_timings_keeps_both():
+    # No timings to trim with: duplicate rather than lose 1485-1492.
+    prev = [Segment(start=1485, end=1508, text="early words shared words")]
+    nxt = [Segment(start=1492, end=1515, text="shared words late words")]
+    p, n = longasr.dedupe_overlap(prev, 1508.0, nxt, 1492.0, seam=1500.0)
+    assert len(p) == 1 and len(n) == 1
+
+
+def test_seam_unclipped_winner_never_hides_speech_only_loser_heard():
+    # prev's copy is whole (19-22.9) but next's clipped copy runs on to 27:
+    # dropping next's copy would lose 22.9-27, which prev never heard.
+    prev = [Segment(start=19, end=22.9, text=" a b c d")]
+    nxt = [_worded(20, 27, ["b", "c", "d", "e", "f", "g", "h"])]
+    p, n = longasr.dedupe_overlap(prev, 24.0, nxt, 20.0, seam=22.0)
+    assert [s.text for s in p] == [" a b c d"]
+    assert [s.text.split() for s in n] == [["e", "f", "g", "h"]]
+
+
+@ffmpeg_present
+def test_window_extraction_starts_before_core(two_files, tmp_path, monkeypatch):
+    starts = []
+    real = media_mod.extract_window
+
+    def spy(path, dest, start, dur):
+        starts.append(start)
+        return real(path, dest, start, dur)
+
+    monkeypatch.setattr(media_mod, "extract_window", spy)
+    _run(two_files, FakeBackend(_abs_starts([50, 30])), tmp_path / "run")
+    # file A (50 s): cores at 0, 20, 40 -> extracted from 0, 16, 36
+    assert starts[:3] == [0.0, 16.0, 36.0]
+
+
 # --- end-to-end on real ffmpeg windows -----------------------------------------
 
 
@@ -205,10 +265,10 @@ def test_no_temp_wav_exceeds_window_and_none_remain(two_files, tmp_path, monkeyp
     backend = FakeBackend(_abs_starts([50, 30]))
     _run(two_files, backend, tmp_path / "run")
     assert len(seen) == 5
-    assert max(seen) <= W + OV + 0.05
+    assert max(seen) <= W + 2 * OV + 0.05
     assert not list((tmp_path / "run").rglob("*.wav"))
     # the engine only ever saw bounded windows too
-    assert max(d for _, d in backend.calls) <= W + OV + 0.05
+    assert max(d for _, d in backend.calls) <= W + 2 * OV + 0.05
 
 
 @ffmpeg_present
@@ -351,8 +411,7 @@ def test_media_group_transcribe_only(two_files, tmp_path, monkeypatch):
     def boom(*a, **k):
         raise AssertionError("must not be called")
 
-    monkeypatch.setattr(media_mod, "to_wav", boom)                  # never whole-file
-    monkeypatch.setattr("video2mdnotes.main.transcribe_audio", boom)
+    assert not hasattr(media_mod, "to_wav")                          # never whole-file
     monkeypatch.setattr("video2mdnotes.main.generate_summary", boom)  # no LLM
     out = tmp_path / "E3"
     result = CliRunner().invoke(app, ["media", *map(str, two_files), "--group",

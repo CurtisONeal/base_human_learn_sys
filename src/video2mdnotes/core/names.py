@@ -122,15 +122,21 @@ class TranscriptVocab:
 # --- headings ------------------------------------------------------------------------------
 
 
-def hedge_title(title: str, speakers: Sequence[str], meta_words: set) -> str:
+def hedge_title(title: str, speakers: Sequence[str], meta_words: set,
+                preferred: Optional[Dict[str, str]] = None) -> str:
     """"Title (Harsha)" -> "Title — Harsha (ASR spelling)" when "Harsha" is an
-    outline speaker that the metadata does not confirm."""
+    outline speaker that the metadata does not confirm. With `preferred`
+    ({outline name: most-used transcript spelling}, WP-F9) the heading uses
+    the better-supported spelling and keeps the outline's as "also heard as"."""
     m = _TRAILING_PAREN.search(title or "")
     if not m:
         return title
     name = " ".join(m.group(1).split())
     if name not in speakers or in_metadata(name, meta_words):
         return title
+    shown = (preferred or {}).get(name, name)
+    if shown != name:
+        return f"{title[: m.start()].rstrip()} — {shown} ({HEDGE}; also heard as {name})"
     return f"{title[: m.start()].rstrip()} — {name} ({HEDGE})"
 
 
@@ -217,9 +223,26 @@ def quality_cell(text: str) -> str:
     return sanitize_cell(text)
 
 
+_PERSON_HINT = re.compile(
+    r"\b(?:he|she|his|her|him|they|person|MC|host|organi[sz]er|organi[sz]ing|speaker|"
+    r"co-?founder|founder|engineer|manager|lead|head|director|handles|joined|team|"
+    r"member|staff|CEO|CTO|introduced|thanked|role)\b")
+
+
 def _strip_for_names(md: str) -> str:
     md = re.sub(r"```.*?```", " ", md or "", flags=re.S)
-    md = re.sub(r"`[^`\n]*`", " ", md)
+    # A backticked term that IS a person ("`Ted Shoxal` - the evening's MC",
+    # E3c Key Concepts) stays; any other code span ("`Amazon Bedrock`: a
+    # model-provider service") is removed.
+    def keep(line: str) -> str:
+        def sub(m):
+            term = m.group(1).strip()
+            if NAME_RE.fullmatch(term) and _PERSON_HINT.search(line[m.end():]):
+                return f" {term} "
+            return " "
+        return re.sub(r"`([^`\n]*)`", sub, line)
+
+    md = "\n".join(keep(line) for line in md.split("\n"))
     md = citations.CITE_RE.sub(" ", md)
     return md
 
@@ -251,7 +274,8 @@ def note_names(notes: Iterable[str], vocab: TranscriptVocab, meta_words: set) ->
 
 def names_rows(*, speakers: Sequence[Tuple[str, Sequence[str]]], notes: Iterable[str],
                respellings: Sequence[Tuple[str, str]], vocab: TranscriptVocab,
-               meta_words: set) -> List[NameRow]:
+               meta_words: set,
+               found: Optional[Dict[str, Sequence[Tuple[str, str]]]] = None) -> List[NameRow]:
     """Rows of the names subsection: outline speakers (with variants), names
     from the notes, and unapplied re-spellings. Spellings are counted in the
     transcript; a name the metadata confirms is left out."""
@@ -271,13 +295,17 @@ def names_rows(*, speakers: Sequence[Tuple[str, Sequence[str]]], notes: Iterable
             out.append((toks[0], vocab.count(toks[0])))
         return out
 
+    found = found or {}
     for name, variants in speakers:
         if in_metadata(name, meta_words):
             continue
-        var = [v for v in variants if v and v != name]
-        rows[name.lower()] = NameRow(name, spellings(name, var),
-                                     "outline speaker" + (f"; variants given: {', '.join(var)}"
-                                                          if var else ""))
+        heard = [(w, how) for w, how in found.get(name, ())]
+        var = [v for v in variants if v and v != name and v not in {w for w, _ in heard}]
+        basis = "outline speaker" + (f"; variants given: {', '.join(var)}" if var else "")
+        if heard:
+            basis += "; transcript calls this speaker " + ", ".join(
+                f"{w} ({how})" for w, how in heard)
+        rows[name.lower()] = NameRow(name, spellings(name, var + [w for w, _ in heard]), basis)
     for heard, probable in respellings:
         # "Chris Halasey" -> "Chris Halasi" where "Chris Halasi" already has a
         # row: one row for the person, carrying the note.
@@ -330,6 +358,199 @@ def render_names(rows: Sequence[NameRow], provenance_label: str) -> str:
     return "\n".join(out) + "\n"
 
 
-__all__ = ["HEDGE", "NAMES_HEADING", "NameRow", "TranscriptVocab", "hedge_title",
-           "in_metadata", "is_machine", "is_name_respelling", "metadata_words",
-           "names_rows", "note_names", "render_names"]
+# --- WP-F9: speaker variants from the transcript ------------------------------------------
+#
+# E3c: the outline named the ch. 4 speaker "Archer" (heard once, "Archer's
+# work focuses on ...") while the transcript says "Harsha" twice — in the
+# roll call "Morgan, Harsha, Jason, Chris, and Louie" [0:06:20] and in the
+# introduction "So this is Harsha" [0:28:05]. Neither is a spelling variant
+# (different first letter, different Soundex), so only the CONTEXT links
+# them: the roll call lists the speakers in talk order, and an introduction
+# names the speaker just as their section starts.
+
+_INTRO_RE = re.compile(
+    rf"\b(?:this\s+is|i'?m|i\s+am|my\s+name\s+is|please\s+welcome|welcome|"
+    rf"introduce|introducing|give\s+it\s+up\s+for|hand\s+it\s+(?:over\s+)?to)\s+"
+    rf"(?P<name>{_TOK})", re.I)
+INTRO_BEFORE_S = 30.0
+INTRO_AFTER_S = 90.0
+
+
+def _first(name: str) -> str:
+    toks = (name or "").split()
+    return toks[0] if toks else ""
+
+
+def _same_person(word: str, speaker: str, variants: Sequence[str]) -> bool:
+    w = word.lower()
+    forms = [speaker] + list(variants)
+    return any(w == _first(f).lower() or sounds_alike(word, _first(f)) for f in forms if f)
+
+
+def transcript_speaker_variants(
+        speakers: Sequence[Tuple[str, Sequence[str], float]], segments: Sequence,
+        vocab: TranscriptVocab) -> Dict[str, List[Tuple[str, str]]]:
+    """{speaker: [(variant, how found)]} — spellings of an outline speaker's
+    name that the transcript uses in a roll call or an introduction.
+
+    `speakers` = (speaker, outline variants, section start seconds), in talk
+    order. Deterministic; a candidate must be a capitalised word the
+    transcript never uses in lowercase, and not another speaker's name."""
+    order: List[Tuple[str, List[str], float]] = []
+    for sp, var, start in speakers:
+        if sp and all(_first(sp) != _first(o[0]) for o in order):
+            order.append((sp, list(var or []), float(start)))
+    out: Dict[str, List[Tuple[str, str]]] = {sp: [] for sp, _, _ in order}
+    if not order:
+        return out
+
+    def taken(word: str, me: Optional[str] = None) -> bool:
+        return any(_same_person(word, sp, var) for sp, var, _ in order if sp != me)
+
+    def add(sp: str, word: str, how: str) -> None:
+        if (word.lower() != _first(sp).lower() and not vocab.common_word(word)
+                and len(word) >= 3 and all(word != w for w, _ in out[sp])):
+            out[sp].append((word, how))
+
+    # 1. Roll call: a list of >= 3 capitalised names, >= 2 of them speakers.
+    #    Between two matched anchors, ONE unmatched name and ONE unmatched
+    #    speaker pair up (talk order = list order).
+    for s in segments:
+        text = getattr(s, "text", "") or ""
+        for m in re.finditer(rf"{_TOK}(?:\s*,\s*(?:and\s+)?{_TOK}){{2,}}", text):
+            toks = re.findall(_TOK, m.group(0))
+            if any(vocab.common_word(t) for t in toks):
+                continue
+            match: List[Optional[int]] = []
+            for t in toks:
+                j = next((k for k, (sp, var, _) in enumerate(order)
+                          if _same_person(t, sp, var)), None)
+                match.append(j)
+            if sum(1 for j in match if j is not None) < 2:
+                continue
+            anchors = [(-1, -1)] + [(i, j) for i, j in enumerate(match) if j is not None] + [
+                (len(toks), len(order))]
+            for (i0, j0), (i1, j1) in zip(anchors, anchors[1:]):
+                free_t = list(range(i0 + 1, i1))
+                free_s = list(range(j0 + 1, j1))
+                if len(free_t) == 1 and len(free_s) == 1:
+                    sp = order[free_s[0]][0]
+                    if not taken(toks[free_t[0]], sp):
+                        add(sp, toks[free_t[0]], f"roll call [{_hms(getattr(s, 'start', 0.0))}]")
+    # 2. Introduction just as the speaker's first section starts.
+    for sp, var, start in order:
+        for s in segments:
+            t0 = float(getattr(s, "start", 0.0) or 0.0)
+            if not (start - INTRO_BEFORE_S <= t0 <= start + INTRO_AFTER_S):
+                continue
+            for m in _INTRO_RE.finditer(getattr(s, "text", "") or ""):
+                w = m.group("name")
+                if not taken(w, sp):
+                    add(sp, w, f"introduction [{_hms(t0)}]")
+    return out
+
+
+def _hms(seconds: float) -> str:
+    s = int(seconds or 0)
+    return f"{s // 3600}:{(s % 3600) // 60:02d}:{s % 60:02d}"
+
+
+def preferred_spelling(speaker: str, variants: Sequence[str], vocab: TranscriptVocab) -> str:
+    """The spelling of a speaker's first name the transcript uses most
+    (outline spelling on ties)."""
+    first = _first(speaker)
+    best, best_n = first, vocab.count(first)
+    for v in variants:
+        v = _first(v)
+        n = vocab.count(v)
+        if n > best_n:
+            best, best_n = v, n
+    if best == first:
+        return speaker
+    rest = speaker.split()[1:]
+    return " ".join([best] + rest)
+
+
+# --- WP-F9: hedging names in the notes body -------------------------------------------------
+
+
+def hedge_names_in_body(md: str, names: Sequence[str]) -> Tuple[str, int]:
+    """First mention of each name in `md` gets "(ASR spelling)" unless it is
+    already hedged. A backticked name is hedged after the closing backtick.
+    Text inside citations and headings is left alone."""
+    count = 0
+    for name in names:
+        pat = re.compile(rf"(`?){re.escape(name)}(`?)(?!\s*\((?:ASR|{re.escape(HEDGE)}))")
+        lines = md.split("\n")
+        done = False
+        for i, line in enumerate(lines):
+            if done or line.lstrip().startswith("#") or line.lstrip().startswith("|"):
+                continue
+            m = next((x for x in pat.finditer(line)
+                      if line[:x.start()].count('"') % 2 == 0          # not inside a quote
+                      and not re.match(r"\s+[A-Z]", line[x.end():])), None)  # not "X Y Corp"
+            if not m:
+                continue
+            if f"{name} ({HEDGE}" in line or f"{name}` ({HEDGE}" in line:
+                done = True
+                continue
+            end = m.end()
+            lines[i] = f"{line[:end]} ({HEDGE}){line[end:]}"
+            done = True
+            count += 1
+        md = "\n".join(lines)
+    return md, count
+
+
+# --- WP-F9: private individuals (giveaway winners, attendees) --------------------------------
+
+PRIVATE_CONTEXT_RE = re.compile(
+    r"\b(?:winners?|won|raffle|giveaway|prize|drawing|drawn|draw|picked\s+at\s+random|"
+    r"attendees?|audience\s+member|from\s+the\s+audience)\b", re.I)
+WITHHELD = "an attendee (name withheld)"
+
+
+def private_names(chapter_notes: Iterable[str], candidates: Sequence[str],
+                  protected: Sequence[str]) -> List[str]:
+    """Candidate names (people in the notes) that are not speakers/organisers
+    and appear ONLY in giveaway/winner/attendee context — private
+    individuals the notes must not name."""
+    texts = list(chapter_notes)
+    prot = {_first(p).lower() for p in protected if p} | {p.lower() for p in protected if p}
+    out = []
+    for name in candidates:
+        if name.lower() in prot or _first(name).lower() in prot:
+            continue
+        lines = [ln for t in texts for ln in t.split("\n") if name in ln]
+        if lines and all(PRIVATE_CONTEXT_RE.search(ln) for ln in lines):
+            out.append(name)
+    return out
+
+
+def redact_private(md: str, private: Sequence[str]) -> Tuple[str, List[dict]]:
+    """Replace each private name (and an appositive after it — ", Senior
+    Business Analyst at Clear result") with WITHHELD; "a winner from <Org>"
+    -> "a winner". Returns (md, log entries)."""
+    log: List[dict] = []
+    for name in private:
+        pat = re.compile(
+            rf"`?{re.escape(name)}`?(?:,\s*[^,\[\]\n.;|]{{1,80}}?(?=\s*\[|[.;|]|$))?", re.M)
+        md, n = pat.subn(WITHHELD, md)
+        if n:
+            log.append({"rule": "names:private-redacted", "name": name, "count": n,
+                        "why": "named only in giveaway/winner/attendee context"})
+    md2, n = re.subn(
+        r"\b((?:an?|the)\s+(?:winner|attendee)s?)\s+from\s+[A-Z][\w&.'-]*"
+        r"(?:\s+(?![\[(])[A-Za-z][\w&.'-]*){0,2}(?=\s*[\[.,;)]|$)",
+        r"\1", md, flags=re.M)
+    if n:
+        log.append({"rule": "names:private-redacted", "name": "<organisation of a winner>",
+                    "count": n, "why": "'a winner from <org>' identifies a private person"})
+    return md2, log
+
+
+__all__ = ["HEDGE", "NAMES_HEADING", "NameRow", "TranscriptVocab", "hedge_names_in_body",
+           "hedge_title", "in_metadata", "is_machine", "is_name_respelling",
+           "metadata_words", "names_rows", "note_names", "preferred_spelling",
+           "private_names", "redact_private", "render_names",
+           "transcript_speaker_variants"]

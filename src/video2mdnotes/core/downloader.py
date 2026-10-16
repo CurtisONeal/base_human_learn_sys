@@ -150,9 +150,14 @@ def probe_source(url: str, allow_embed_scrape: bool = True) -> List[SourceInfo]:
     return sources
 
 
-def fetch_audio(source: SourceInfo) -> Path:
+def fetch_audio(source: SourceInfo, convert: bool = True) -> Path:
     """
-    Downloads the audio for one probed source and returns the .wav path.
+    Downloads the audio for one probed source and returns its path.
+
+    convert=False keeps yt-dlp's native audio stream (m4a/webm/opus) with no
+    post-processing: the transcription path (core/longasr.py) extracts bounded
+    16 kHz windows from it, so a multi-hour talk is never converted whole to
+    one wav. convert=True (legacy callers) returns a whole-file .wav.
 
     Raises:
         yt_dlp.utils.DownloadError: If yt-dlp fails to download the audio.
@@ -167,20 +172,26 @@ def fetch_audio(source: SourceInfo) -> Path:
 
     ydl_opts_download = {
         'format': 'bestaudio/best',
-        'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'wav'}],
-        'outtmpl': str(output_path.with_suffix('')),
+        'outtmpl': str(output_path.with_suffix('')) + ('' if convert else '.%(ext)s'),
         'quiet': True,
     }
+    if convert:
+        ydl_opts_download['postprocessors'] = [
+            {'key': 'FFmpegExtractAudio', 'preferredcodec': 'wav'}]
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts_download) as ydl:
-            ydl.download([source.url])
+            if convert:
+                ydl.download([source.url])
+                return output_path
+            info = ydl.extract_info(source.url, download=True)
+            downloads = (info or {}).get("requested_downloads") or []
+            path = downloads[0].get("filepath") if downloads else None
+            return Path(path or ydl.prepare_filename(info))
     except yt_dlp.utils.DownloadError as e:
         logger.error(f"Failed to download {source.title}. Reason: {e}")
         # Re-raise to stop the entire process if one video fails
         raise e
-
-    return output_path
 
 
 def download_audio(url: str) -> List[DownloadResult]:
