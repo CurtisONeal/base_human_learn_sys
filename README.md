@@ -634,6 +634,19 @@ certification metadata selects the `exam-prep` section profile
 `SubscriptionExhausted` / `BudgetExhausted` stop loses nothing (`--no-resume`
 redoes everything).
 
+**Citation audit (no model call).** Before a passage is checkpointed,
+`core/citations.py` checks every cited bullet and table row: its salient
+terms (code spans, identifiers, tool/command names, numbers with units, plus
+words that are rare in the passage) must be said within ±60 s of the cited
+time. A citation whose terms are only said at ONE other place in the passage
+is moved there; one whose strong terms are never said is marked
+`_(unverified citation)_`. Every decision is logged in `citation_audit.json`
+(`citation:retarget` / `citation:unverified`, plus `citation:ambiguous`
+entries that changed nothing). `longform.reaudit_chunks(run_dir)` re-audits
+existing `chunk_summaries/` without calling a model. Ledger entries carry
+`status: observed|expected|superseded`, so a demo's expected outcome is not
+handed to the next part as fact.
+
 **Assembly never re-summarizes.** The final
 `summaries/<name>.summary.md` is frontmatter (`published`, `as_of`,
 provenance, structure rung, model, run id) + a `## Course Map` (the only later

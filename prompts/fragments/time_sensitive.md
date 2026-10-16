@@ -44,8 +44,12 @@ header row and the separator row of the table, then a line `- None` under it.
 
 In `## Fact-Checked Notes`, judge whether a claim is outdated relative to the
 source's `Published:` date, not relative to today. A claim that was correct on
-the published date is not an error in the source even if it has changed since;
-write "correct as of <published date>; may have changed since" instead.
+the published date is not an error in the source even if it has changed since.
+
+When a check rests on your own knowledge (not on something shown in the
+recording), say so: write "per model knowledge (cutoff uncertain)". Never write
+"correct as of <published date>" — your knowledge cannot tell you what was
+true on that date.
 
 State your own uncertainty explicitly: your knowledge has a cutoff and you
 cannot see changes after it. When the published date is after, or close to,
