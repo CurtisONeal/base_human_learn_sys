@@ -167,3 +167,8 @@ _(append each run: date, eval, P1–P8 results, cost, decision)_
 
 - Fixes merged 85c026d (545 pass). Replay of citation audit on E1 notes retargets exactly the 2 flagged citations (→7:58:25, 7:59:35), 26 ambiguous logged unchanged.
 - E1b: fresh rerun (`--no-resume`) of chapters 1,2,6,7 → previous_run_results/E1b_cca_f_pilot, P8 sample seed 1.
+
+### 2026-10-15 23:02–23:07 ET · E1b pilot rerun (fixes F1–F3)
+- Fresh run, 4 m 50 s, claude-cli only, $0 metered. Citation audit in-run: 3 retargets, 28 ambiguous (unchanged, logged).
+- P1 PASS 4/4 · P2 PASS 775/775 · P3 PASS · P4 PASS · P5 PASS 52/52 · P6 PASS 0 · P7 PASS 104/104.
+- P8: fresh independent reviewer running (seed 1, 20 of 331 claims) + regression checks for E1 defects.
