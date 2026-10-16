@@ -129,14 +129,14 @@ the hard stop.
 | WP | Status | Commit | Notes |
 |---|---|---|---|
 | Safety copies | in progress | — | `~/Movies/CLE-AI-26_09_safety_copies/`, SHA256SUMS.txt |
-| WP-0 | in progress (agent, worktree) | | started 2026-10-15 ~22:00 ET |
+| WP-0 | **done** — merged | 9fc43cb | 24 tests. Real data: P3 PASS (99.996%, max gap 29 s); transcript has 89 glossary mishearings (67 "cloud code") |
 | WP-1 | **done** — merged | 11775c3 | 15 new tests; 320 pass. Note for WP-6b: `media` still calls whole-file `to_wav()` — must become windowed |
 | WP-6a | in progress (agent, worktree) | | started 2026-10-15 ~22:00 ET |
-| WP-2 | pending | | |
-| WP-4 | pending | | |
+| WP-2 | in progress (agent, worktree) | | wave 2, started ~22:40 ET |
+| WP-4 | in progress (agent, worktree) | | wave 2, started ~22:40 ET |
 | WP-8 | **done** — merged | 9358c31 | 339 pass. Open: VLM step bypasses ledger (frames off by default); Nous prices unverified; hermes proxy default 127.0.0.1:8645 |
 | WP-3 | pending | | |
-| WP-5 | pending | | |
+| WP-5 | in progress (agent, worktree) | | wave 2, started ~22:40 ET |
 | WP-7 | pending | | |
 | WP-6b | pending | | |
 | E1 | pending | | |
