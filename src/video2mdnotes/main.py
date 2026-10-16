@@ -56,6 +56,21 @@ def _resolve_exhaustion_policy() -> str:
     return settings.on_exhaustion
 
 
+USD_CAP_HELP = ("Per-run metered spend cap in USD for THIS invocation (overrides "
+                "RUN_USD_CAP). 0 = no metered call at all. The cumulative "
+                "METERED_USD_CAP still applies.")
+
+
+def _apply_usd_cap(usd_cap) -> None:
+    """--usd-cap: set the per-run cap for this invocation (None = keep RUN_USD_CAP)."""
+    if usd_cap is None:
+        return
+    if usd_cap < 0:
+        console.print("[red]--usd-cap must be >= 0[/red]")
+        raise typer.Exit(2)
+    settings.run_usd_cap = float(usd_cap)
+
+
 NO_SUMMARY_PREFIX = "no_summary_"
 
 
@@ -257,6 +272,7 @@ def longform(
              "outline, cues or windows. The outline rung makes ONE model call, "
              "cached in structure_outline.json; auto tries it only with no "
              "chapters and > 30 min of media"),
+    usd_cap: float = typer.Option(None, "--usd-cap", help=USD_CAP_HELP),
 ):
     """Long-form notes for an EXISTING run dir — no download, no transcription.
 
@@ -277,6 +293,7 @@ def longform(
 
     if on_exhaustion:
         settings.on_exhaustion = on_exhaustion.strip().lower()
+    _apply_usd_cap(usd_cap)
     run_dir = Path(run_dir).expanduser()
     out_dir = Path(out).expanduser() if out else run_dir
     try:
@@ -332,6 +349,7 @@ def media(
         None, "--asr-backend",
         help="Long-recording engine: auto | parakeet-mlx | faster-whisper[:model] (default ASR_BACKEND)",
     ),
+    usd_cap: float = typer.Option(None, "--usd-cap", help=USD_CAP_HELP),
 ):
     """Transcribe and summarize local audio or video. No network access.
 
@@ -362,6 +380,7 @@ def media(
 
     if on_exhaustion:
         settings.on_exhaustion = on_exhaustion.strip().lower()
+    _apply_usd_cap(usd_cap)
 
     files: list = []
     for raw in paths:
@@ -841,6 +860,7 @@ def book(
         None, "--on-exhaustion",
         help="When the subscription runs out: wait | metered | local | stop | ask.",
     ),
+    usd_cap: float = typer.Option(None, "--usd-cap", help=USD_CAP_HELP),
 ):
     """Summarize an owned book or paper, preserving chapter/page locators.
 
@@ -853,6 +873,7 @@ def book(
 
     if on_exhaustion:
         settings.on_exhaustion = on_exhaustion.strip().lower()
+    _apply_usd_cap(usd_cap)
 
     target = Path(path).expanduser()
     if not target.exists():
@@ -925,12 +946,14 @@ def process(
         help="When the subscription runs out: wait | metered | local | stop | ask. "
              "Default 'wait' — never starts spending money unattended.",
     ),
+    usd_cap: float = typer.Option(None, "--usd-cap", help=USD_CAP_HELP),
 ):
     """
     Downloads, transcribes, and summarizes a video or playlist from a URL.
     """
     if on_exhaustion:
         settings.on_exhaustion = on_exhaustion.strip().lower()
+    _apply_usd_cap(usd_cap)
     if group_by_playlist:
         settings.group_by_playlist = True
     if visuals_only:

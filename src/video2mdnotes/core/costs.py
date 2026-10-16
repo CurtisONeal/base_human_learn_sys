@@ -17,6 +17,14 @@ Three properties are load-bearing:
 * **Fail closed.** An unreadable ledger means spend is unknown, so metered calls
   are refused (BudgetExhausted) instead of assumed free.
 
+Two scopes of cap, both enforced inside the same atomic `reserve`:
+
+* **Cumulative** (METERED_USD_CAP, PROVIDER_USD_CAPS): everything metered in
+  the ledger file, across every run that ever pointed at it.
+* **Per run** (RUN_USD_CAP, or `--usd-cap` for one invocation): only entries
+  whose run_id is this run's (`current_run_id()`). A cap of 0 forbids metered
+  calls outright, whatever their estimate — even one litellm prices at $0.
+
 The ledger is a single JSON file shared by all runs pointed at it; delete or
 re-point COST_LEDGER_PATH to start a new budget.
 """
@@ -209,11 +217,13 @@ class CostLedger:
         with self._locked():
             return list(self._read()["entries"])
 
-    def spent(self, provider: str | None = None) -> float:
-        """Total metered USD, optionally for one provider."""
+    def spent(self, provider: str | None = None, run_id: str | None = None) -> float:
+        """Total metered USD, optionally for one provider and/or one run."""
         return sum(
             float(e.get("usd", 0.0)) for e in self.entries()
-            if e.get("kind") == METERED and (provider is None or e.get("provider") == provider)
+            if e.get("kind") == METERED
+            and (provider is None or e.get("provider") == provider)
+            and (run_id is None or e.get("run_id") == run_id)
         )
 
     def calls(self, provider: str | None = None, kind: str | None = None) -> int:
@@ -245,8 +255,27 @@ class CostLedger:
 
     @staticmethod
     def _check_entries(entries: list[dict], provider: str, estimate_usd: float,
-                       total_cap: float | None, provider_caps: dict[str, float] | None) -> None:
+                       total_cap: float | None, provider_caps: dict[str, float] | None,
+                       run_cap: float | None = None, run_id: str | None = None) -> None:
         metered = [e for e in entries if e.get("kind") == METERED]
+        if run_cap is not None:
+            rid = run_id or current_run_id()
+            this_run = sum(float(e.get("usd", 0.0)) for e in metered
+                           if e.get("run_id") == rid)
+            if float(run_cap) <= 0:
+                raise BudgetExhausted(
+                    f"per-run cap is $0 (RUN_USD_CAP / --usd-cap 0): no metered call "
+                    f"is allowed in this run; refused {provider}",
+                    provider=provider, spent=this_run, cap=0.0, estimate=estimate_usd,
+                )
+            if this_run + estimate_usd > float(run_cap):
+                raise BudgetExhausted(
+                    f"per-run cap ${float(run_cap):.2f} would be exceeded: this run "
+                    f"({rid}) has spent/reserved ${this_run:.4f}, this call to "
+                    f"{provider} could cost up to ${estimate_usd:.4f}",
+                    provider=provider, spent=this_run, cap=float(run_cap),
+                    estimate=estimate_usd,
+                )
         total = sum(float(e.get("usd", 0.0)) for e in metered)
         mine = sum(float(e.get("usd", 0.0)) for e in metered if e.get("provider") == provider)
 
@@ -266,7 +295,8 @@ class CostLedger:
             )
 
     def check(self, provider: str, estimate_usd: float,
-              total_cap: float | None, provider_caps: dict[str, float] | None) -> None:
+              total_cap: float | None, provider_caps: dict[str, float] | None,
+              run_cap: float | None = None, run_id: str | None = None) -> None:
         """Raise BudgetExhausted if a metered call of this estimate could overrun a cap.
 
         Read-only. A caller that goes on to make the call must use `reserve`
@@ -280,12 +310,18 @@ class CostLedger:
                 f"cost ledger unreadable ({exc}); refusing metered call to {provider}",
                 provider=provider,
             ) from exc
-        self._check_entries(entries, provider, estimate_usd, total_cap, provider_caps)
+        self._check_entries(entries, provider, estimate_usd, total_cap, provider_caps,
+                            run_cap=run_cap, run_id=run_id)
 
     def reserve(self, *, provider: str, model: str, estimate_usd: float,
                 total_cap: float | None, provider_caps: dict[str, float] | None,
-                input_tokens: int = 0, run_id: str | None = None) -> str:
+                input_tokens: int = 0, run_id: str | None = None,
+                run_cap: float | None = None) -> str:
         """Atomically check the caps AND book the worst-case estimate.
+
+        `run_cap` (None = no per-run cap) counts only entries whose run_id is
+        `run_id` (default: this process's run) — settled spend and open
+        reservations alike — so parallel threads of one run share it.
 
         Under one exclusive flock (serialises threads and processes alike):
         read, check, append a `reserved` entry charged at the estimate.
@@ -293,7 +329,7 @@ class CostLedger:
         leaves the estimate charged, which errs toward stopping. Returns the
         reservation id.
         """
-        rid = uuid.uuid4().hex
+        res_id = uuid.uuid4().hex
         with self._locked():
             try:
                 data = self._read()
@@ -302,12 +338,13 @@ class CostLedger:
                     f"cost ledger unreadable ({exc}); refusing metered call to {provider}",
                     provider=provider,
                 ) from exc
+            run_id = run_id or current_run_id()
             self._check_entries(data["entries"], provider, estimate_usd,
-                                total_cap, provider_caps)
+                                total_cap, provider_caps, run_cap=run_cap, run_id=run_id)
             data["entries"].append({
-                "id": rid,
+                "id": res_id,
                 "timestamp": dt.datetime.now().isoformat(timespec="seconds"),
-                "run_id": run_id or current_run_id(),
+                "run_id": run_id,
                 "provider": provider,
                 "model": model,
                 "kind": METERED,
@@ -318,7 +355,7 @@ class CostLedger:
                 "reserved": True,
             })
             self._write(data)
-        return rid
+        return res_id
 
     def settle(self, reservation_id: str, *, input_tokens: int | None = None,
                output_tokens: int | None = None, usd: float | None = None,

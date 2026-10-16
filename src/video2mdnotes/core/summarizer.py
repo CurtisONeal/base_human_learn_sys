@@ -285,7 +285,8 @@ def _complete_metered(route: Route, system_prompt: str, user_message: str) -> st
     rid = ledger.reserve(provider=route.ledger_provider, model=route.entry,
                          estimate_usd=estimate, total_cap=settings.metered_usd_cap,
                          provider_caps=settings.provider_usd_caps,
-                         input_tokens=prompt_tokens)
+                         input_tokens=prompt_tokens,
+                         run_cap=settings.run_usd_cap)
     try:
         content, response = _complete_response(
             route.litellm_model, route.api_key, system_prompt, user_message,
@@ -497,8 +498,8 @@ def complete_with_failover(system_prompt: str, user_message: str) -> tuple[str, 
         raise BudgetExhausted(
             "Stopping: every metered provider that could take this call is at its "
             "spend cap, and no other provider succeeded. Raise METERED_USD_CAP / "
-            "PROVIDER_USD_CAPS or point COST_LEDGER_PATH at a new ledger to "
-            "continue. Details: " + "; ".join(errors),
+            "PROVIDER_USD_CAPS / RUN_USD_CAP (--usd-cap) or point COST_LEDGER_PATH "
+            "at a new ledger to continue. Details: " + "; ".join(errors),
             provider=last.provider, spent=last.spent, cap=last.cap,
             estimate=last.estimate,
         )

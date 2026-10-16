@@ -273,6 +273,23 @@ unreadable ledger refuses metered calls rather than assuming nothing was spent.
 Delete or re-point the ledger to start a fresh budget. Not covered: the vision
 tier (`VLM_MODEL`), which still bills outside the ledger.
 
+**Cumulative vs per-run caps.** `METERED_USD_CAP` and `PROVIDER_USD_CAPS` are
+**cumulative**: they count everything metered in the ledger file, across every
+run that has ever used it. `RUN_USD_CAP` (default unset = none) is **per run**:
+it counts only metered spend plus open reservations recorded under the current
+run id (one per process, or `RUN_ID` when set). Both are checked in the same
+atomic reservation, so whichever is tighter wins. Override the per-run cap for
+one invocation with `--usd-cap` on `process`, `media`, `book` and `longform`, or
+with `usd_cap` in the API body (`POST /process {"url": ..., "usd_cap": 0.5}`);
+each API request is its own run. `--usd-cap 0` means **no metered call at all**
+in this run — even one priced at $0 — and also switches the un-ledgered vision
+tier off. Subscription (`claude-cli/…`) calls are never affected.
+
+```bash
+.venv/bin/python -m video2mdnotes.main longform runs/x --usd-cap 0      # subscription only
+.venv/bin/python -m video2mdnotes.main book big.pdf --usd-cap 2.50     # at most $2.50 this run
+```
+
 **3. Local models (`ollama/…`, `lm_studio/…`) — privacy option, off by default**
 
 ```
@@ -367,7 +384,11 @@ Run the application as a REST API with a Swagger UI.
 docker compose up api
 ```
 *   **Access**: Open your browser to **http://127.0.0.1:8000/docs**.
-*   **Usage**: Use the `POST /process` endpoint to submit URLs.
+*   **Usage**: Use the `POST /process` endpoint to submit URLs:
+    `{"url": "https://...", "usd_cap": 0}` (`usd_cap` optional — per-request
+    metered cap, see "Cumulative vs per-run caps"). Requests run one at a time
+    (each is its own ledger run), and go through the same length gate as the
+    CLI: transcripts over 12k words take the long-form path.
 *   **Shutdown**: Press `Ctrl+C` in the terminal to gracefully stop the server.
 
 ### 3. Interactive Mode (Shell)
