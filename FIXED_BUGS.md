@@ -485,3 +485,46 @@ Newest first. Format: symptom → cause → fix → how we know.
 - **Cause:** `entry['url']` on YouTube is a signed, expiring link.
 - **Fix:** prefer `webpage_url`.
 - **Test:** `test_probe_source_records_canonical_watch_url`.
+
+### Claude CLI "session limit" message not treated as exhaustion
+- **Symptom:** E2d (2026-10-16): three passages failed with "You've hit your session limit · resets 9:30am (America/New_York)" instead of waiting for the reset.
+- **Cause:** the exhaustion pattern knew "usage limit"/"rate limit" wording only, and the reset parser knew durations, not wall-clock times.
+- **Fix:** match "session limit" / "hit your … limit"; parse "resets 9:30am" as the next occurrence of that local time.
+- **Test:** `test_session_limit_wording_is_exhaustion_with_clock_reset`.
+
+### Model cited a timestamp past the end of the video
+- **Symptom:** E2d P2 2396/2397 — "[12:42:00]" in a 12:38:36 video, between two correct neighbours.
+- **Cause:** the citation audit only checked citations against the passage's lines; nothing rejected times outside the passage.
+- **Fix:** lone citations > 120 s outside the passage are dropped and logged (`citation:out_of_range`); a line left without a citation is marked unverified.
+- **Test:** `test_out_of_range_citation_is_dropped_and_logged`.
+
+### Camera reset clock became the recording date
+- **Symptom:** the CLE-AI meetup (Sept 2026) would have been dated 2024-01-01 in `as_of`.
+- **Cause:** a device date ≥ 2005 and not after capture was trusted; an unset camera clock boots to January 1.
+- **Fix:** Jan 1 device dates are treated as reset defaults (as_of falls back to the captured date, labelled).
+- **Test:** `test_recorded_date_used_when_plausible_and_reset_clock_ignored`.
+
+### Speech lost at ASR window seams
+- **Symptom:** none observed in output — found by the Fable final review: a sentence crossing a seam lost up to ~10 s, invisible to the completeness gate.
+- **Cause:** windows had look-ahead overlap only; when both copies were edge-clipped the earlier one was dropped whole.
+- **Fix:** symmetric overlap; a copy is only dropped when the other covers it; both-clipped copies keep their own side of the seam.
+- **Test:** `test_seam_sentence_cut_by_both_edges_loses_nothing` (and three siblings).
+
+### Whole-file audio conversion still reachable
+- **Symptom:** none observed — review: `media` with an unreadable duration and `process` on a caption-less long video decoded the entire file to one wav (violates the "never whole-file" rule; the 4 GB WAV limit truncated a 12.6 h file silently once before).
+- **Fix:** one windowed path (`longasr.transcribe_media`) for all local media and downloads; `to_wav` removed; unknown duration is measured with the null muxer or fails clearly.
+- **Test:** `test_zero_probe_duration_is_measured_not_decoded_whole`, `test_process_without_captions_uses_windowed_asr`.
+
+### Metered cap could be overshot at concurrency 3; reserved Anthropic credit unguarded
+- **Cause:** cap check and record were separate steps per thread; `anthropic/*` routes were ordinary metered entries.
+- **Fix:** atomic `reserve()`/`settle()` under the ledger lock; billed-but-failed calls keep their estimate; `anthropic/*` refused unless `ALLOW_ANTHROPIC_API=true`.
+- **Test:** `test_cap_reservation_is_atomic_across_threads`, `test_anthropic_route_refused_before_ledger`.
+
+### SD-card paths accepted by `media`
+- **Fix:** `/Volumes/...` inputs refused with "make a verified safety copy" (originals are irreplaceable).
+- **Test:** `test_media_cli_refuses_volumes`.
+
+### Promo text in a description became transcript-wide casing rules; "today" dropped product claims
+- **Cause:** any ALL-CAPS description word became a casing rule ("CODE", "LIKE"); the ephemeral filter dropped every row containing "today".
+- **Fix:** acronyms from title/tags (description only for hyphenated/vowel-less forms like CCA-F); "today" dropped only with outage/usage words.
+- **Test:** `test_promo_description_acronyms_do_not_become_casing_rules`, `test_today_product_claims_are_kept_and_session_glitches_dropped`.
