@@ -47,7 +47,9 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from video2mdnotes.config import BASE_DIR
-from video2mdnotes.core import citations, domains, notes_format, quality, spoken_dates, summarizer
+from video2mdnotes.core import (
+    citations, domains, notes_format, outline as outline_mod, quality, spoken_dates, summarizer,
+)
 from video2mdnotes.core.chunking import DEFAULT_MAX_WORDS
 from video2mdnotes.core.costs import BudgetExhausted, current_run_id
 from video2mdnotes.core.metadata import META_FILENAME, SourceMeta, from_ytdlp_info, prompt_header
@@ -227,6 +229,8 @@ class Plan:
     profile: str
     chapters: List[List[Passage]]    # all chapters, in order
     selected: List[List[Passage]]    # after --only
+    structure_mode: str = "auto"
+    outline: Optional[outline_mod.OutlineResult] = None   # None: rung not tried
 
     @property
     def passages(self) -> List[Passage]:
@@ -292,12 +296,20 @@ def build_plan(
     only: Optional[str] = None,
     max_words: int = DEFAULT_MAX_WORDS,
     write: bool = True,
+    structure: str = "auto",
+    outline_complete: Optional[CompleteFn] = None,
 ) -> Plan:
     """Everything deterministic: meta, provenance, correction, structure, passages.
 
     With `write`, the out dir gets source_meta.json, the raw transcript (when
     out != run dir), the corrected transcript and corrections.json. The raw
     transcript is never modified.
+
+    `structure` picks the ladder start (auto/outline/cues/windows). The
+    outline rung's one model call goes through `outline_complete`; None means
+    cache-only (no call), so a plain build_plan never reaches a model. The
+    outline cache (structure_outline.json in the out dir) is the one file
+    written even when `write` is False — it is what makes a rerun free.
     """
     run_dir = Path(run_dir)
     out_dir = Path(out_dir) if out_dir else run_dir
@@ -325,15 +337,25 @@ def build_plan(
         _, _, written = quality.write_corrected_transcript(out_raw, glossary)
         corrections = written
 
-    structure = media_sections(corrected, meta, max_words=max_words)
-    chapters = _chapters(structure)
+    outline_res = None
+    if outline_mod.needs_outline(corrected, meta, structure):
+        outline_res = outline_mod.obtain_outline(
+            corrected, meta, out_dir, complete=outline_complete,
+            extra_cache_dirs=[run_dir] if run_dir.resolve() != out_dir.resolve() else [])
+    structure_res = media_sections(
+        corrected, meta, max_words=max_words, mode=structure,
+        outline=outline_res.entries if outline_res else None,
+        outline_source=(outline_res.model or "a model") if outline_res else "a model",
+        outline_note=outline_res.note if outline_res and outline_res.entries is None else "")
+    chapters = _chapters(structure_res)
     return Plan(
         run_dir=run_dir, out_dir=out_dir, name=name, raw_transcript=raw,
         meta=meta, meta_origin=meta_origin, provenance=provenance,
         glossary=glossary, corrections=corrections, segments=corrected,
-        structure=structure, skeleton=course_skeleton(structure, meta),
+        structure=structure_res, skeleton=course_skeleton(structure_res, meta),
         profile=domains.longform_profile(meta),
         chapters=chapters, selected=select_chapters(chapters, only),
+        structure_mode=structure, outline=outline_res,
     )
 
 
@@ -1452,6 +1474,14 @@ def describe_plan(plan: Plan, state: Optional[State] = None) -> str:
         f"profile: {plan.profile}",
         f"Structure: {plan.structure.provenance} (rung: {plan.structure.rung})",
         f"Glossary corrections: {len(plan.corrections)} · words: {word_count(plan.segments):,}",
+    ]
+    if plan.outline is not None:
+        o = plan.outline
+        how = ("cached" if o.cached else "1 call made" if o.called else "no call made")
+        lines.append(f"Outline: {how}"
+                     + (f" · model: {o.model}" if o.model else "")
+                     + (f" · {o.note}" if o.note else ""))
+    lines += [
         "",
         "  #  key                                              range                  words",
     ]
@@ -1468,7 +1498,11 @@ def describe_plan(plan: Plan, state: Optional[State] = None) -> str:
         f"Passages: {sum(len(c) for c in plan.chapters)} in all, {split} chapter(s) split; "
         f"selected: {len(plan.passages)} passage(s) in {len(plan.selected)} chapter(s)",
         f"Estimated model calls: {passage_calls} passage + {map_calls} course map = "
-        f"{passage_calls + map_calls}",
+        f"{passage_calls + map_calls}"
+        + (" (+1 outline)" if plan.outline is not None and plan.outline.entries is None
+           and not plan.outline.cached and not plan.outline.called else ""),
+        "",
+        plan.skeleton,
     ]
     return "\n".join(lines)
 
@@ -1483,6 +1517,7 @@ def run_longform(
     complete: Optional[CompleteFn] = None,
     max_words: int = DEFAULT_MAX_WORDS,
     progress: Progress = print,
+    structure: str = "auto",
 ) -> LongformResult:
     """The long-form path on a run dir that already has a transcript.
 
@@ -1490,8 +1525,17 @@ def run_longform(
     resumes) and LongformIncomplete (some passages failed for other reasons).
     """
     complete = complete or _default_complete
-    plan = build_plan(run_dir, out_dir, only=only, max_words=max_words, write=True)
+    plan = build_plan(run_dir, out_dir, only=only, max_words=max_words, write=True,
+                      structure=structure, outline_complete=complete)
     state = State(plan.out_dir)
+    if plan.outline is not None:
+        with state.lock:
+            state.data["structure_outline"] = {
+                "rung": plan.structure.rung, "model": plan.outline.model,
+                "cached": plan.outline.cached, "called": plan.outline.called,
+                "note": plan.outline.note, "file": outline_mod.CACHE_FILENAME,
+            }
+            state.save()
     progress(f"Long-form: {len(plan.passages)} passage(s) in {len(plan.selected)} chapter(s); "
              f"{plan.structure.provenance}")
     ran, skipped = run_passages(plan, state, complete, resume=resume,
