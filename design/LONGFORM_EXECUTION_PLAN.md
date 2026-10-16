@@ -131,14 +131,14 @@ the hard stop.
 | Safety copies | **done** — 7/7 SHA-256 verified, read-only | — | `~/Movies/CLE-AI-26_09_safety_copies/`. Meetup = 4 parts ≈ 1 h 59 m (30:11, 28:24, 32:21, 28:09); camera-clock start times show ~3 s between parts → one recording split at 4 GB. 3 short clips (4 s, 30 s, 12 s) are test shots. Camera clock wrong (2024-01-01) |
 | WP-0 | **done** — merged | 9fc43cb | 24 tests. Real data: P3 PASS (99.996%, max gap 29 s); transcript has 89 glossary mishearings (67 "cloud code") |
 | WP-1 | **done** — merged | 11775c3 | 15 new tests; 320 pass. Note for WP-6b: `media` still calls whole-file `to_wav()` — must become windowed |
-| WP-6a | in progress (agent, worktree) | | started 2026-10-15 ~22:00 ET |
+| WP-6a | **done** — merged | 24960e8 | Benchmark: parakeet-mlx 40× real-time, WER ≈ large-v3 on content words, tightest timestamps, more domain mishearings (no prompt) → glossary pass fixes. Fallback distil-large-v3 (5.6×). mlx-whisper loops — not for unattended. 522 pass |
 | WP-2 | **done** — merged | e114cb2 | CCA-F: rung=description, 13 ch + preamble, 3 chapters split in 2 (≤12k words), full coverage. WP-3: use path[0] for chapter name; feed groups, not chunk_sections (it would re-merge parts) |
 | WP-4 | **done** — merged | 51e31f6 | CCA-F: 89→0 evaluator mishearings, 104 corrections logged, raw byte-identical. Bare "cloud"(=Claude, ~30) left alone deliberately → WP-3 prompt carries a mishearing hint |
 | WP-8 | **done** — merged | 9358c31 | 339 pass. Open: VLM step bypasses ledger (frames off by default); Nous prices unverified; hermes proxy default 127.0.0.1:8645 |
 | WP-3 | **done** — merged | 6d30f98, 3328d01 | 492 pass. plan-only CCA-F = 17 passages + 3 map calls. Real smoke (MCP chapter, claude-cli/opus): P1–P7 PASS. Gaps: 12k-word passage vs 900 s CLI timeout untested; real ledger hand-off untested (E1 covers) |
 | WP-5 | **done** — merged | 3f668e5 | notes_format.py; WP-3 MUST call validate_time_sensitive (fill) before stamp_notes or P5 fails |
 | WP-7 | folded into WP-3 | | |
-| WP-6b | pending | | |
+| WP-6b | in progress (agent, worktree) | | parakeet primary; ends with E3 transcription of the 4-part meetup (no LLM) |
 | E1 | P1–P7 PASS; P8 under review | | see eval log |
 | E2 | pending | | |
 | E3 | pending | | |
