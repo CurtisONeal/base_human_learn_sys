@@ -69,6 +69,10 @@ class Settings(BaseSettings):
 
     openai_api_key: str | None = None
     anthropic_api_key: str | None = None
+    # anthropic/* routes (LLM_MODELS entries and the vision tier) are refused
+    # unless this is true: the Anthropic API credit is reserved for the advisor
+    # and code review, and the pipeline must never spend it.
+    allow_anthropic_api: bool = False
 
     # Escalate to METERED backends when the subscription is exhausted, without
     # changing ON_EXHAUSTION. False keeps the policy above exactly as it is

@@ -100,6 +100,7 @@ def test_chain_falls_back_to_next_entry(mock_transcript_result, mock_prompt_file
     pinned_chain(["openai/gpt-4o", "anthropic/claude-haiku-4-5"])
     settings.openai_api_key = "openai-key"
     settings.anthropic_api_key = "anthropic-key"
+    settings.allow_anthropic_api = True        # deliberate opt-in (F9 (g))
 
     with patch("video2mdnotes.core.summarizer.litellm.completion") as mock_completion:
         ok = MagicMock()

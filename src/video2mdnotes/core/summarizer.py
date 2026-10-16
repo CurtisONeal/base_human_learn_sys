@@ -237,35 +237,66 @@ def resolve_route(entry: str) -> Route:
                  api_key=_api_key_for(entry))
 
 
-def _complete_metered(route: Route, system_prompt: str, user_message: str) -> str:
-    """Cap-checked metered call: estimate, refuse if over a cap, call, record.
+# Errors raised when the provider REJECTED the request before generating
+# anything: no tokens billed, so the reservation is released. Every other
+# failure (timeout, empty output, connection drop, 5xx) may have been billed
+# and keeps the worst-case estimate in the ledger.
+_UNBILLED_ERRORS = tuple(
+    getattr(litellm, name) for name in (
+        "AuthenticationError", "PermissionDeniedError", "NotFoundError",
+        "BadRequestError", "UnsupportedParamsError",
+    ) if isinstance(getattr(litellm, name, None), type)
+)
 
-    Raises BudgetExhausted BEFORE any network call when the worst case
-    (prompt tokens + the full output allowance) would exceed a cap.
+
+def _complete_metered(route: Route, system_prompt: str, user_message: str) -> str:
+    """Cap-checked metered call: estimate, reserve, call, settle.
+
+    Raises AnthropicApiRefused for an anthropic/* route (reserved credit)
+    and BudgetExhausted BEFORE any network call when the worst case (prompt
+    tokens + the full output allowance) would exceed a cap. The cap check and
+    the booking of the estimate are one atomic ledger operation, so parallel
+    chapter threads cannot all pass against the same total. A call that fails
+    after it may have been billed stays charged at the estimate.
     """
+    costs.refuse_anthropic_api(route.entry)
+    costs.refuse_anthropic_api(route.litellm_model or "")
     ledger = costs.get_ledger()
     max_out = settings.metered_max_output_tokens
     prompt_tokens = costs.estimate_prompt_tokens(
         system_prompt + "\n" + user_message, route.litellm_model
     )
     estimate = costs.price_tokens(route.entry, prompt_tokens, max_out, route.litellm_model)
-    ledger.check(route.ledger_provider, estimate,
-                 settings.metered_usd_cap, settings.provider_usd_caps)
-
-    content, response = _complete_response(
-        route.litellm_model, route.api_key, system_prompt, user_message,
-        api_base=route.api_base, max_tokens=max_out,
-    )
+    rid = ledger.reserve(provider=route.ledger_provider, model=route.entry,
+                         estimate_usd=estimate, total_cap=settings.metered_usd_cap,
+                         provider_caps=settings.provider_usd_caps,
+                         input_tokens=prompt_tokens)
+    try:
+        content, response = _complete_response(
+            route.litellm_model, route.api_key, system_prompt, user_message,
+            api_base=route.api_base, max_tokens=max_out,
+        )
+    except _UNBILLED_ERRORS:
+        try:
+            ledger.release(rid)
+        except Exception:  # noqa: BLE001 - leaving it charged is the safe side
+            pass
+        raise
+    except Exception as exc:
+        try:
+            ledger.settle(rid, estimated=True,
+                          note=f"failed after send ({type(exc).__name__}); worst-case estimate kept")
+        except Exception:  # noqa: BLE001 - reservation already charges the estimate
+            pass
+        raise
     tin, tout, usd, estimated = costs.usage_and_cost(
         response, route.entry, route.litellm_model, fallback_usd=estimate
     )
     try:
-        ledger.record(provider=route.ledger_provider, model=route.entry,
-                      kind=costs.METERED, input_tokens=tin, output_tokens=tout,
-                      usd=usd, estimated=estimated)
+        ledger.settle(rid, input_tokens=tin, output_tokens=tout, usd=usd, estimated=estimated)
     except Exception as exc:  # noqa: BLE001 - the call is paid for; keep its output
-        print(f"Summarizer: WARNING — could not record ${usd:.4f} for {route.entry} "
-              f"in the cost ledger ({exc}). Spend caps are now under-counting.")
+        print(f"Summarizer: WARNING — could not settle ${usd:.4f} for {route.entry} "
+              f"in the cost ledger ({exc}); the worst-case estimate stays charged.")
     return content
 
 

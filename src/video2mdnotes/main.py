@@ -217,6 +217,9 @@ def _longform_waiting(run_dir: Path, **kwargs):
             if _resolve_exhaustion_policy() != "wait":
                 raise
             _wait_for_reset(exc)
+            # A fresh run (--no-resume) only needs to be fresh once: the
+            # retry must keep the passages finished before the wait.
+            kwargs["resume"] = True
 
 
 def _summarize_transcript(transcript, project_dir: Path):
