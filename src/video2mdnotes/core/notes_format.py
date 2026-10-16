@@ -64,7 +64,13 @@ EPHEMERAL_PATTERNS = (
     ("resets-in", re.compile(r"\bresets?\s+(?:\"|\')?in\b|\breset\b[^|]{0,30}?\bdays?\s+away\b", re.I)),
     ("time-left", re.compile(
         r"\b(?:minutes?|mins?|hours?|days?)\s+(?:left|remaining|away)\b", re.I)),
-    ("today", re.compile(r"(?<!as of )\btoday\b", re.I)),
+    # "today" alone is not session state: "Claude Code today supports MCP
+    # servers" is a product claim (F9 review (j)). Only drop it together with
+    # an outage/usage word describing the speaker's own session.
+    ("today", re.compile(
+        r"^(?=.*(?<!as of )\btoday\b)(?=.*\b(?:not\s+(?:\w+\s+){0,2}working|isn'?t\s+working"
+        r"|working\s+as\s+expected|down|outage|glitch(?:y|es)?|broken|flaky|slow|lagging"
+        r"|usage|quota|rate[\s-]?limit(?:ed)?|limits?\s+(?:hit|reached)|errors?)\b)", re.I | re.S)),
     ("own-quota", re.compile(
         r"\b(?:his|her|my)\s+(?:own\s+)?(?:subscription\s+)?(?:usage|quota|credits|limit)\b", re.I)),
 )

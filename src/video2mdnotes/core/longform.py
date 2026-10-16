@@ -319,8 +319,9 @@ def build_plan(
     name = notes_name(raw)
     meta, meta_origin = load_meta(run_dir, name, raw)
     provenance = quality.infer_provenance(run_dir)
-    glossary = quality.build_glossary(meta)
     segments = load_segments(raw)
+    glossary = quality.build_glossary(
+        meta, transcript_text=" ".join(s.text for s in segments))
     if meta.duration_s and segments and segments[-1].end > meta.duration_s >= segments[-1].start:
         # The last cue's end is a speech-rate estimate; never let it push the
         # media end (and the last chapter's cited range) past the real duration.
