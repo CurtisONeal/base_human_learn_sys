@@ -301,6 +301,23 @@ class Settings(BaseSettings):
     fw_compute: str = "auto" # auto, int8, float16, int8_float16
     fw_lang: str = "en"
 
+    # Long-recording ASR (core/longasr.py). Media longer than
+    # ASR_LONG_THRESHOLD_S — or any camera-split multi-part group — is
+    # transcribed in bounded windows, never converted whole to one wav.
+    #   ASR_BACKEND: "auto" (parakeet-mlx when available and the material is
+    #   English; else faster-whisper:distil-large-v3; non-English context always
+    #   faster-whisper:large-v3), or an explicit "name[:model]".
+    asr_backend: str = "auto"
+    asr_window_s: float = 1500.0
+    asr_overlap_s: float = 8.0
+    asr_long_threshold_s: float = 1200.0
+    # Completeness gate: longest allowed un-transcribed stretch that is not
+    # detected silence, and the minimum audio coverage of the summed duration.
+    asr_max_gap_s: float = 120.0
+    asr_min_coverage: float = 0.98
+    # Window silence detection (ffmpeg silencedetect) — what counts as silent.
+    asr_silence_db: float = -40.0
+
     # File Paths (defaults are relative to project root)
     output_dir: Path = BASE_DIR / "previous_run_results"
     temp_dir: Path = BASE_DIR / "temp_files"

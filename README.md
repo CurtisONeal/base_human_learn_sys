@@ -440,13 +440,42 @@ locally.
 `"parakeet-mlx"`, `"mlx-whisper"`. Each engine transcribes one bounded wav window into the same
 `Segment`/`TranscriptResult` shape. A missing package (the MLX engines need the `asr-mlx` extra,
 Apple Silicon only) makes the backend report itself unavailable instead of failing at import.
-**The production path (`transcribe_audio`) still uses faster-whisper. WP-6b wires the interface in.**
+Short files (≤ `ASR_LONG_THRESHOLD_S`, 20 min) still go through `transcribe_audio` (faster-whisper).
+Longer files and camera-split multi-part recordings go through `core/longasr.py` (below).
 
 Measured on two 10-minute CCA-F windows (`design/ASR_BENCHMARK.md`): parakeet decodes at 40× real
 time, against 1.1–1.8× for faster-whisper large-v3 on CPU. Its content-word accuracy is about the
 same. It mishears more domain terms ("Cloud Code", "STK"), because it takes no vocabulary prompt.
 mlx-whisper looped and hallucinated, so it is not recommended for unattended runs. Re-run with
 `scripts/bench_asr.py`. It extracts one window with ffmpeg and deletes it afterwards.
+
+### Long recordings: windowed ASR (`core/longasr.py`)
+
+`media` never converts a long recording to one wav. Each file is cut into `ASR_WINDOW_S` (1500 s)
+windows plus `ASR_OVERLAP_S` (8 s) look-ahead. Each window is extracted by ffmpeg
+(`-ss start -t dur -i src -vn -ac 1 -ar 16000`) to a temp wav. The wav is transcribed, the result is
+checkpointed to `asr/<file>_<window>.json`, and the wav is deleted. A rerun skips checkpointed
+windows. Overlap duplicates are removed by keeping the copy further from its window edge.
+
+Camera-split parts (same codecs and frame size, `creation_time` contiguous within 10 s) are
+auto-grouped into one recording. You can also force grouping with `--group`. Parts are stitched in
+filename order with cumulative offsets, which are recorded in `source_meta.json` (`parts`) and
+`asr_manifest.json`.
+
+The **completeness gate** checks that every window has a checkpoint, that audio coverage and the
+transcribed span are each ≥ 98 % of the summed duration, and that no gap holds more than
+`ASR_MAX_GAP_S` (120 s) of non-silent audio. Silence is measured per window with ffmpeg
+silencedetect, and silent windows are recorded as silent, not missing. When the gate fails, no
+transcript is written: the manifest says `complete: false` and the run counts as failed.
+
+Engine (`ASR_BACKEND=auto`): parakeet-mlx for English, falling back to faster-whisper
+distil-large-v3. Non-English context always gets faster-whisper large-v3 (the `asr_select` policy),
+even over a pin.
+
+    media part1.MOV part2.MOV part3.MOV --group --transcribe-only --out previous_run_results/meetup
+
+`--transcribe-only` stops after the transcript, so no LLM calls are made. Without it, the
+transcript goes to the usual length gate, and the long-form path applies the glossary correction.
 
 ### Long runs: resuming and running out of capacity
 
