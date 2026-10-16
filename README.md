@@ -70,7 +70,7 @@ video2mdnotes/
 
 ### Package Management
 
-> ⚠️ **Use `uv sync --extra ocr --extra dev --extra documents --extra semantic`, not a bare `uv sync`.**
+> ⚠️ **Use `uv sync --extra ocr --extra dev --extra documents --extra semantic --extra asr-mlx`, not a bare `uv sync`.**
 > OCR, dev and document dependencies are optional extras, so a bare sync silently
 > removes `ruff`, `pytest`, `ocrmac`, `imagehash`, `Pillow`, `pymupdf` and `fastembed` — leaving
 > a checkout that looks fine but has no lint, no tests, no visual extraction,
@@ -172,7 +172,7 @@ uv lock --upgrade-package yt-dlp          # or: --upgrade-package numpy
 #    ocrmac, imagehash, Pillow and pymupdf — leaving a checkout that looks fine
 #    but has no lint, no tests, no visual extraction, and no PDF support.
 #    (EPUB needs no extra: it is stdlib zipfile + html.parser.)
-uv sync --extra ocr --extra dev --extra documents --extra semantic
+uv sync --extra ocr --extra dev --extra documents --extra semantic --extra asr-mlx
 
 # 3. Fast check.
 .venv/bin/python -m pytest tests/ -q -m "not integration"
@@ -433,6 +433,20 @@ and be rejected as "no speech."
 
 Disable the whole behavior with `CAPTIONS_FIRST=false` to always transcribe
 locally.
+
+### ASR backends (`core/asr/`)
+
+`core/asr/` is a pluggable engine interface: `get_backend("faster-whisper:distil-large-v3")`,
+`"parakeet-mlx"`, `"mlx-whisper"`. Each engine transcribes one bounded wav window into the same
+`Segment`/`TranscriptResult` shape. A missing package (the MLX engines need the `asr-mlx` extra,
+Apple Silicon only) makes the backend report itself unavailable instead of failing at import.
+**The production path (`transcribe_audio`) still uses faster-whisper. WP-6b wires the interface in.**
+
+Measured on two 10-minute CCA-F windows (`design/ASR_BENCHMARK.md`): parakeet decodes at 40× real
+time, against 1.1–1.8× for faster-whisper large-v3 on CPU. Its content-word accuracy is about the
+same. It mishears more domain terms ("Cloud Code", "STK"), because it takes no vocabulary prompt.
+mlx-whisper looped and hallucinated, so it is not recommended for unattended runs. Re-run with
+`scripts/bench_asr.py`. It extracts one window with ffmpeg and deletes it afterwards.
 
 ### Long runs: resuming and running out of capacity
 
