@@ -76,6 +76,8 @@ _AUDIO_STREAM = re.compile(
     r"Stream #\d+:\d+.*?:\s*Audio:\s*([A-Za-z0-9_]+).*?(\d+)\s*Hz,\s*([^,]+)", re.S
 )
 _VIDEO_STREAM = re.compile(r"Stream #\d+:\d+.*?:\s*Video:")
+# Video codec + frame size, for matching camera-split parts of one recording.
+_VIDEO_DETAIL = re.compile(r"Stream #\d+:\d+.*?:\s*Video:\s*([A-Za-z0-9_]+).*?\b(\d{2,5})x(\d{2,5})\b")
 # Container metadata tag. Device clock — see SourceMeta.recorded_at.
 _CREATION_TIME = re.compile(r"^\s*creation_time\s*:\s*(\S+)", re.M)
 # Recognised so the user is told the real problem rather than "decode failed".
@@ -109,6 +111,11 @@ class MediaInfo:
     # Raw `creation_time` tag if the container has one. The recording device's
     # clock, which is often wrong — never treat it as a publish date.
     creation_time: Optional[str] = None
+    # Video stream codec and frame size, when there is a video stream. Used to
+    # recognise the parts of one camera recording split at a file-size limit.
+    video_codec: Optional[str] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
 
     @property
     def is_probably_speech(self) -> bool:
@@ -180,6 +187,7 @@ def probe(path: Path) -> MediaInfo:
         hours, minutes, seconds = match.groups()
         duration = int(hours) * 3600 + int(minutes) * 60 + float(seconds)
 
+    vdetail = _VIDEO_DETAIL.search(output)
     return MediaInfo(
         path=path,
         duration_seconds=duration,
@@ -188,6 +196,9 @@ def probe(path: Path) -> MediaInfo:
         channels=audio.group(3).strip(),
         has_video=bool(_VIDEO_STREAM.search(output)),
         creation_time=(m.group(1) if (m := _CREATION_TIME.search(output)) else None),
+        video_codec=vdetail.group(1) if vdetail else None,
+        width=int(vdetail.group(2)) if vdetail else None,
+        height=int(vdetail.group(3)) if vdetail else None,
     )
 
 
@@ -222,6 +233,35 @@ def to_wav(path: Path, destination: Path, info: Optional[MediaInfo] = None) -> P
         raise NoAudioStreamError(
             f"{path.name}: produced an empty audio track ({info.human_duration} "
             "reported). The file may be silent or truncated."
+        )
+    return destination
+
+
+def extract_window(path: Path, destination: Path, start_s: float, duration_s: float) -> Path:
+    """Decode ONE bounded window of a file to 16 kHz mono PCM wav.
+
+    The long-recording path (core/longasr.py) uses this instead of `to_wav`:
+    a whole multi-hour recording is never converted to one audio file. `-ss`
+    before `-i` seeks the input, so the cost is proportional to the window,
+    not to its position in the file.
+    """
+    path, destination = Path(path), Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    proc = subprocess.run(
+        [
+            _ffmpeg(), "-hide_banner", "-loglevel", "error", "-y",
+            "-ss", f"{max(0.0, start_s):.3f}",
+            "-t", f"{max(0.0, duration_s):.3f}",
+            "-i", str(path),
+            "-vn", "-ac", "1", "-ar", str(TARGET_RATE), "-c:a", "pcm_s16le",
+            str(destination),
+        ],
+        capture_output=True, text=True, timeout=1800,
+    )
+    if proc.returncode != 0 or not destination.exists():
+        raise UnreadableMediaError(
+            f"{path.name}: window extraction at {start_s:.1f}s failed — "
+            f"{(proc.stderr or '').strip()[:200]}"
         )
     return destination
 

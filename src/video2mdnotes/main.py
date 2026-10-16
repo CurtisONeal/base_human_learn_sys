@@ -4,6 +4,7 @@ import shutil
 import sys
 import time
 import datetime as dt
+from typing import List
 import yt_dlp
 from pathlib import Path
 from rich.console import Console
@@ -286,13 +287,31 @@ def longform(
 
 @app.command()
 def media(
-    path: str = typer.Argument(..., help="Audio/video file, or a directory of them"),
+    paths: List[str] = typer.Argument(..., help="Audio/video files and/or directories of them"),
     force: bool = typer.Option(False, "--force", help="Re-transcribe files that already have notes"),
     probe_only: bool = typer.Option(
         False, "--probe", help="Report format, duration and codec. Free — no transcription."
     ),
-    keep_wav: bool = typer.Option(False, "--keep-wav", help="Keep the converted 16kHz wav"),
+    keep_wav: bool = typer.Option(False, "--keep-wav", help="Keep the converted 16kHz wav (short files only)"),
     on_exhaustion: str = typer.Option(None, "--on-exhaustion"),
+    group: bool = typer.Option(
+        False, "--group", help="Treat ALL given files as ordered parts of ONE recording (filename order)"
+    ),
+    auto_group: bool = typer.Option(
+        True, "--auto-group/--no-auto-group",
+        help="Join camera-split consecutive parts (same codec/resolution, creation_time contiguous within 10 s)",
+    ),
+    transcribe_only: bool = typer.Option(
+        False, "--transcribe-only", help="Stop after the transcript: no summarization, no model (LLM) calls"
+    ),
+    out: Path = typer.Option(
+        None, "--out", help="Run dir for a single recording; output root when there are several"
+    ),
+    title: str = typer.Option(None, "--title", help="Title for a single recording (default: file name)"),
+    asr_backend: str = typer.Option(
+        None, "--asr-backend",
+        help="Long-recording engine: auto | parakeet-mlx | faster-whisper[:model] (default ASR_BACKEND)",
+    ),
 ):
     """Transcribe and summarize local audio or video. No network access.
 
@@ -302,31 +321,42 @@ def media(
     writes ADPCM into a .wav is common, and trusting the extension is how those
     files get silently mishandled.
 
+    Recordings longer than ASR_LONG_THRESHOLD_S (20 min), and camera-split
+    multi-part recordings, are transcribed in bounded windows with per-window
+    checkpoints and a completeness gate (core/longasr.py) — never converted
+    whole to one wav. Re-running resumes from the checkpoints.
+
         media ~/Recordings --probe        # what have I actually got?
         media ~/Recordings/meeting.m4a
+        media part1.MOV part2.MOV --group --transcribe-only --out runs/meetup
     """
     from video2mdnotes.core.media import (
         MediaError, describe, find_media, probe as probe_media, to_wav,
     )
-    from video2mdnotes.core.metadata import from_local_media
+    from video2mdnotes.core.metadata import from_local_group, from_local_media
     from video2mdnotes.core.downloader import sanitize_filename
+    from video2mdnotes.core import longasr
+    from video2mdnotes.core.asr.base import BackendUnavailable
 
     if on_exhaustion:
         settings.on_exhaustion = on_exhaustion.strip().lower()
 
-    target = Path(path).expanduser()
-    if not target.exists():
-        console.print(f"[red]No such path:[/red] {target}")
-        raise typer.Exit(1)
-
-    files = find_media(target)
-    if not files:
-        console.print(f"[red]No supported media in[/red] {target}")
-        console.print("[dim]If your recorder writes a proprietary container, export "
-                      "to WAV or MP3 from its own software first.[/dim]")
-        raise typer.Exit(1)
+    files: list = []
+    for raw in paths:
+        target = Path(raw).expanduser()
+        if not target.exists():
+            console.print(f"[red]No such path:[/red] {target}")
+            raise typer.Exit(1)
+        found = find_media(target)
+        if not found:
+            console.print(f"[red]No supported media in[/red] {target}")
+            console.print("[dim]If your recorder writes a proprietary container, export "
+                          "to WAV or MP3 from its own software first.[/dim]")
+            raise typer.Exit(1)
+        files += [f for f in found if f not in files]
 
     done = failed = skipped = 0
+    infos = []
     for position, source_file in enumerate(files, 1):
         label = f"[{position}/{len(files)}]"
         try:
@@ -340,48 +370,118 @@ def media(
             console.print(f"{label} [red]vanished:[/red] {source_file}")
             failed += 1
             continue
-
         console.print(f"{label} [bold]{source_file.name}[/bold]")
         console.print(f"      [dim]{describe(info)}[/dim]")
-        if probe_only:
-            continue
+        infos.append(info)
 
-        safe_title = sanitize_filename(source_file.stem)
-        project_dir = settings.output_dir / safe_title
+    if group and infos:
+        units = [sorted(infos, key=lambda i: i.path.name)]
+    elif auto_group:
+        units = longasr.group_parts(infos)
+    else:
+        units = [[i] for i in infos]
+
+    if probe_only:
+        for unit in units:
+            if len(unit) > 1:
+                total = sum(i.duration_seconds for i in unit)
+                console.print(f"[bold]Recording group[/bold] ({len(unit)} parts, "
+                              f"{total / 60:.1f} min): " + ", ".join(i.path.name for i in unit))
+        console.print(f"\n[bold]Probed {len(files)} files[/bold] · {failed} unreadable")
+        return
+
+    for unit in units:
+        first, last = unit[0], unit[-1]
+        total_s = sum(float(i.duration_seconds or 0.0) for i in unit)
+        is_long = len(unit) > 1 or total_s > settings.asr_long_threshold_s
+        if title and len(units) == 1:
+            unit_title = title
+        elif len(unit) == 1:
+            unit_title = first.path.stem
+        else:
+            unit_title = f"{first.path.stem}_to_{last.path.stem}"
+        safe_title = sanitize_filename(unit_title)
+        if out and len(units) == 1:
+            project_dir = Path(out).expanduser()
+        else:
+            project_dir = (Path(out).expanduser() if out else settings.output_dir) / safe_title
         summary_path = project_dir / "summaries" / f"{safe_title}.summary.md"
-        if summary_path.exists() and not force:
-            console.print("      [dim]Skipping (already summarized)[/dim]")
+        transcript_path = project_dir / "transcripts" / f"{safe_title}.md"
+        if len(unit) > 1:
+            console.print(f"[bold]Recording {safe_title}[/bold]: {len(unit)} parts, "
+                          f"{total_s / 60:.1f} min")
+        if not force and (summary_path.exists()
+                          or (transcribe_only and transcript_path.exists())):
+            console.print("      [dim]Skipping (already done)[/dim]")
             skipped += 1
             continue
 
-        from_local_media(info, title=source_file.stem).write(project_dir)
-
-        wav_dir = project_dir / "audio"
-        wav_path = wav_dir / f"{safe_title}.wav"
-        try:
-            to_wav(source_file, wav_path, info)
-        except MediaError as exc:
-            console.print(f"      [red]Conversion failed:[/red] {exc}")
-            failed += 1
-            continue
-
-        try:
-            transcript = transcribe_audio(wav_path, title=source_file.stem)
-        except Exception as exc:  # noqa: BLE001
-            console.print(f"      [red]Transcription failed:[/red] {exc}")
-            logger.error(f"{source_file.name}: {exc}")
-            failed += 1
-            continue
-        finally:
-            if not keep_wav:
-                wav_path.unlink(missing_ok=True)
+        if is_long:
+            from_local_group(unit, title=unit_title).write(project_dir)
+            try:
+                backend, why = longasr.select_backend(
+                    metadata_text=unit_title, language=settings.fw_lang, spec=asr_backend)
+                console.print(f"      [dim]Long recording → windowed ASR: "
+                              f"{backend.name}:{backend.model} ({why})[/dim]")
+                long = longasr.transcribe_long(
+                    [i.path for i in unit], backend,
+                    run_dir=project_dir,
+                    window_s=settings.asr_window_s,
+                    overlap_s=settings.asr_overlap_s,
+                    initial_prompt=title or None,
+                    language=settings.fw_lang if settings.fw_lang != "auto" else None,
+                    title=unit_title,
+                    max_gap_s=settings.asr_max_gap_s,
+                    min_coverage=settings.asr_min_coverage,
+                    silence_db=settings.asr_silence_db,
+                    infos=unit,
+                    backend_reason=why,
+                    progress=lambda msg: console.print(f"      [dim]{msg}[/dim]"),
+                )
+            except longasr.AsrIncomplete as exc:
+                console.print(f"      [red]Incomplete transcript — not written:[/red] {exc}")
+                console.print(f"      [dim]See {project_dir / longasr.MANIFEST_FILENAME}; "
+                              "re-run to resume from checkpoints.[/dim]")
+                failed += 1
+                continue
+            except (BackendUnavailable, ValueError, MediaError) as exc:
+                console.print(f"      [red]Transcription failed:[/red] {exc}")
+                failed += 1
+                continue
+            transcript = long.result
+            gate = long.gate
+            console.print(f"      [green]Completeness gate PASS[/green] · coverage "
+                          f"{gate['audio_coverage']:.2%} · span {gate['span_ratio']:.2%} · "
+                          f"max gap {gate['max_gap_s']:.0f}s "
+                          f"(unexplained {gate['max_unexplained_gap_s']:.0f}s)")
+        else:
+            from_local_media(first, title=first.path.stem).write(project_dir)
+            wav_path = project_dir / "audio" / f"{safe_title}.wav"
+            try:
+                to_wav(first.path, wav_path, first)
+            except MediaError as exc:
+                console.print(f"      [red]Conversion failed:[/red] {exc}")
+                failed += 1
+                continue
+            try:
+                transcript = transcribe_audio(wav_path, title=first.path.stem)
+            except Exception as exc:  # noqa: BLE001
+                console.print(f"      [red]Transcription failed:[/red] {exc}")
+                logger.error(f"{first.path.name}: {exc}")
+                failed += 1
+                continue
+            finally:
+                if not keep_wav:
+                    wav_path.unlink(missing_ok=True)
 
         # The transcript is the expensive artifact — write it BEFORE
         # summarizing, so a summarizer failure never costs the transcription.
-        (project_dir / "transcripts").mkdir(parents=True, exist_ok=True)
-        transcript_path = project_dir / "transcripts" / f"{safe_title}.md"
+        transcript_path.parent.mkdir(parents=True, exist_ok=True)
         transcript_path.write_text(transcript.markdown_content, encoding="utf-8")
         console.print(f"      [green]Transcript:[/green] {transcript_path}")
+        if transcribe_only:
+            done += 1
+            continue
 
         try:
             result = _summarize_transcript(transcript, project_dir)
@@ -418,10 +518,7 @@ def media(
         console.print(f"      [green]Notes:[/green] {summary_path}")
         done += 1
 
-    if probe_only:
-        console.print(f"\n[bold]Probed {len(files)} files[/bold] · {failed} unreadable")
-    else:
-        console.print(f"\n[bold]Media:[/bold] {done} done · {skipped} skipped · {failed} failed")
+    console.print(f"\n[bold]Media:[/bold] {done} done · {skipped} skipped · {failed} failed")
 
 
 @app.command()

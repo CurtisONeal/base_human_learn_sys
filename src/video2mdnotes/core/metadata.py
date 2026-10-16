@@ -65,6 +65,10 @@ class SourceMeta(BaseModel):
     # as "recorded (device clock)", if at all.
     recorded_at: Optional[dt.datetime] = None
     recorded_at_note: Optional[str] = None
+    # Local multi-part recordings (camera split at a file-size limit): one
+    # entry per part in timeline order — name, path, duration_s, offset_s
+    # (cumulative start on the stitched timeline), creation_time.
+    parts: List[Dict[str, Any]] = Field(default_factory=list)
 
     def write(self, run_dir: Path) -> Path:
         run_dir = Path(run_dir)
@@ -233,6 +237,36 @@ def from_local_media(info, title: Optional[str] = None) -> SourceMeta:
         recorded_at=recorded_at,
         recorded_at_note=DEVICE_CLOCK_NOTE if recorded_at else None,
     )
+
+
+def from_local_group(infos, title: Optional[str] = None) -> SourceMeta:
+    """SourceMeta for ONE recording split across several files (in order).
+
+    duration = sum of the parts; recorded_at = the first part's device clock,
+    labelled unverified; published stays unknown. The per-part offset map is
+    kept in `parts`.
+    """
+    infos = list(infos)
+    meta = from_local_media(infos[0], title=title)
+    offset, parts = 0.0, []
+    for info in infos:
+        dur = float(info.duration_seconds or 0.0)
+        parts.append({
+            "name": Path(info.path).name,
+            "path": str(Path(info.path).resolve()),
+            "duration_s": dur,
+            "offset_s": offset,
+            "creation_time": getattr(info, "creation_time", None),
+        })
+        offset += dur
+    meta.duration_s = offset or None
+    meta.parts = parts
+    if len(infos) > 1:
+        meta.url = str(Path(infos[0].path).resolve().parent)
+    if meta.recorded_at is not None:
+        meta.recorded_at_note = (f"{DEVICE_CLOCK_NOTE}; unverified; first of "
+                                 f"{len(infos)} part(s)")
+    return meta
 
 
 def format_duration(seconds: Optional[float]) -> str:
