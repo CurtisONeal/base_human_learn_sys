@@ -23,6 +23,15 @@ Include a row for every claim whose truth depends on when it was said:
 - anything said with "currently", "now", "recently", "new", "at the time of
   recording", "as of today", "soon"
 
+Do NOT include personal or ephemeral session state — the speaker's own usage
+meter or quota ("I'm at 72%", "33% used", "100% usage"), countdowns ("resets
+in 9 minutes", "15 minutes left"), today's outages or glitches ("not working
+today"), or what happened to his account during the recording. Such a row
+goes stale within hours and teaches nothing. Include it only when it states a
+product policy (e.g. "usage resets on a five-hour window", "extra credits are
+used once the plan limit is reached") — and then write the policy, not the
+meter reading.
+
 Column rules:
 
 - **claim** — one short sentence stating the claim as the speaker made it.
@@ -32,7 +41,15 @@ Column rules:
   it as `YYYY-MM-DD (captured)`. Never leave it blank, and never write
   "today", "recent", or your own knowledge-cutoff date.
 - **type** — exactly one of: `version`, `feature`, `pricing`, `exam`, `news`,
-  `other`.
+  `other`:
+  - `version` — a version number, model name/generation, "latest";
+  - `feature` — what a product does or allows, including its limits, buffers,
+    defaults, enum values and option lists (e.g. "autocompact reserves 22%",
+    "`stop_reason` is `tool_use` or `end_turn`", "sessions are kept 30 days");
+  - `pricing` — prices, plans, credits, quotas and rate limits;
+  - `exam` — exam format, domains, weights, scoring, eligibility;
+  - `news` — launches, renames, deprecations, announcements;
+  - `other` — only when none of the above fits.
 - **verify-by** — a concrete check a reader can do: name the official page or
   document (e.g. "Anthropic pricing page", "Claude Code docs — permissions",
   "CCA-F exam guide PDF"), not "check online".

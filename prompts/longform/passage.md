@@ -23,6 +23,10 @@ square brackets, at the end of the bullet: `- Hooks run before tool use [1:23:45
 Use only timestamps that appear in the passage. Never invent or round one.
 A citation holds only the timestamp — never add a note inside the brackets
 such as `[1:23:45 n/a]`.
+Never write commentary inside or around a citation — no "is not valid",
+"not cited", "see [...]" or other self-corrections. If a timestamp you were
+about to write is wrong, write only the correct one: `[4:55:13]`, never
+`[5:55:13 is not valid — see [4:55:13]]`.
 Every bullet that states a fact from the recording carries a citation.
 
 - Cite the caption line that STATES the claim — where the command, result or
@@ -61,6 +65,25 @@ claim with `(superseded)` and names what replaced it.
 
 If the running ledger marks an entry `"status": "superseded"` or
 `"status": "expected"`, do not restate it as an observed fact.
+
+## Attribution — who said it, who checked it, who reported it
+
+- **The notes' own checks belong to the notes.** When you add a computation,
+  conversion or sanity check the speaker did not make, label it `Check:` and
+  word it impersonally ("Check: 17 of 60 wrong is ~72%"). Never attribute it
+  to the speaker ("his math check", "he verifies") unless the transcript
+  shows him doing it.
+- **Definitions do not promise more than was said or shown.** Define a feature
+  by what the passage states and, where a demo or lab shows it, by the
+  observed behaviour. Do not add guarantees from general knowledge: if plan
+  mode was shown editing files, do not define it as "proposes without
+  executing"; write what was observed (and, if the speaker claimed more, that
+  the claim and the demo disagree).
+- **Reported is not observed.** When a result comes from what Claude (or the
+  speaker) *said* happened — "Claude reports the tests pass", "he says it
+  worked" — write "reported by Claude" / "reported by the speaker". Write
+  "observed" or state the result plainly only when the transcript shows the
+  output itself.
 
 ## Grounding — do not fabricate
 

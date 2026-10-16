@@ -432,7 +432,7 @@ def test_cca_plan_only_17_passages_zero_calls(cca_copy, monkeypatch):
     out = flat(result.output)
     assert "Passages: 17 in all, 3 chapter(s) split" in out
     assert "Chapters: 14 (13 + preamble)" in out
-    assert "Estimated model calls: 17 passage + 3 course map = 20" in out
+    assert "Estimated model calls: 17 passage + 4 course map = 21" in out
     assert sorted(p.name for p in cca_copy.rglob("*")) == before   # nothing written
 
 
@@ -467,9 +467,22 @@ def test_cca_full_13_chapters_end_to_end(cca_copy, tmp_path):
     result = lf.run_longform(cca_copy, out, complete=mock, concurrency=3,
                              progress=lambda m: None)
     kinds = [k for k, _ in mock.calls]
-    assert kinds.count("passage") == 17 and kinds.count("map") == 3
+    # 3 course-map batches + ONE themes consolidation call (WP-F7)
+    assert kinds.count("passage") == 17 and kinds.count("map") == 4
+    themes_user = [u for k, u in mock.calls if k == "map"][-1]
+    assert themes_user.startswith("Chapters (for reference only):")
+    assert "### Summary" not in themes_user and "Candidate themes from the batches" in themes_user
     notes = result.summary_path.read_text()
     assert "Partial run" not in notes
+    themes = notes.split("### Cross-chapter themes", 1)[1].split("\n## ", 1)[0]
+    assert 1 <= themes.count("\n- ") <= lf.MAX_THEMES
+    # Recording lag: "April 23rd" at 10:17:30 vs published 2026-07-20 (inference only)
+    fm = notes.split("---", 2)[1]
+    assert 'recorded_estimate: "2026-04 (inferred from spoken dates: \\"April 23rd\\" [10:17:30]' in fm
+    assert "as_of: 2026-07-20" in fm
+    title_block = notes.split("---", 2)[2].lstrip().split("\n")
+    assert title_block[0].startswith("# ") and title_block[2].startswith(
+        "> Material appears recorded ~April 2026; time-sensitive claims may predate the publish date.")
     crit = _eval(out, EXPECTED_CCA)
     for k in ("P1", "P2", "P3", "P4", "P5", "P6", "P7"):
         assert crit[k]["pass"], (k, crit[k]["summary"], crit[k]["details"])

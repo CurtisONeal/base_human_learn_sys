@@ -44,10 +44,30 @@ COLUMNS = ("claim", "timestamp", "as-of", "type", "verify-by")
 CLAIM_TYPES = ("version", "feature", "pricing", "exam", "news", "other")
 # Model drift we can map without guessing: synonyms of an allowed type.
 _TYPE_ALIASES = {
-    "price": "pricing", "cost": "pricing", "quota": "pricing", "limit": "pricing",
-    "limits": "pricing", "rate limit": "pricing", "versions": "version",
+    "price": "pricing", "cost": "pricing", "quota": "pricing", "rate limit": "pricing",
+    "rate limits": "pricing", "versions": "version",
+    # Product limits, buffers, defaults and enum values are features (WP-F7):
+    # E2 typed "autocompact reserves 22%" and the stop_reason values `other`.
+    "limit": "feature", "limits": "feature", "default": "feature", "defaults": "feature",
+    "buffer": "feature", "enum": "feature", "setting": "feature", "settings": "feature",
     "features": "feature", "availability": "feature", "announcement": "news",
 }
+
+# Personal / ephemeral session state that is not a claim about the product
+# (WP-F7, E2): "His subscription usage window had about 15 minutes left",
+# "resets 'in 9 minutes', 33% used", "The session hit 100% usage",
+# "Sonnet 'is not today working as expected'". (pattern name, regex)
+EPHEMERAL_PATTERNS = (
+    ("percent-usage", re.compile(
+        r"\b\d{1,3}\s*%\s*(?:used|usage|of\s+(?:my|his|her|the)\s+(?:usage|limit|quota|plan))\b"
+        r"|\b(?:usage|quota)\b[^|]{0,30}?\b(?:at|hit|reached)\s+\d{1,3}\s*%", re.I)),
+    ("resets-in", re.compile(r"\bresets?\s+(?:\"|\')?in\b|\breset\b[^|]{0,30}?\bdays?\s+away\b", re.I)),
+    ("time-left", re.compile(
+        r"\b(?:minutes?|mins?|hours?|days?)\s+(?:left|remaining|away)\b", re.I)),
+    ("today", re.compile(r"(?<!as of )\btoday\b", re.I)),
+    ("own-quota", re.compile(
+        r"\b(?:his|her|my)\s+(?:own\s+)?(?:subscription\s+)?(?:usage|quota|credits|limit)\b", re.I)),
+)
 
 # Same date rule the evaluator's P5 uses.
 DATE_RE = re.compile(r"\b(?:19|20)\d{2}(?:-\d{2}(?:-\d{2})?)?\b")
@@ -389,6 +409,33 @@ def validate_time_sensitive(
     return TimeSensitiveCheck(out, findings)
 
 
+# --- claims table: ephemera filter ---------------------------------------------
+
+
+def ephemeral_reason(claim: str) -> Optional[str]:
+    """The name of the first ephemera pattern the claim matches, or None."""
+    for name, pat in EPHEMERAL_PATTERNS:
+        if pat.search(claim or ""):
+            return name
+    return None
+
+
+def filter_ephemeral(rows: Iterable[ClaimRow]) -> tuple:
+    """(kept rows, dropped entries). A row whose claim is the speaker's own
+    session state (usage meter, countdown, today's glitch) is moved to the
+    dropped list — never silently deleted; callers log it."""
+    kept: List[ClaimRow] = []
+    dropped: List[Dict[str, str]] = []
+    for row in rows:
+        why = ephemeral_reason(row.claim)
+        if why:
+            dropped.append({"claim": row.claim, "timestamp": row.timestamp,
+                            "type": row.type, "pattern": why})
+        else:
+            kept.append(row)
+    return kept, dropped
+
+
 # --- claims table: merge (reduce step) ----------------------------------------
 
 
@@ -526,6 +573,7 @@ def stamp_notes(
 
 __all__ = [
     "AsOf", "ClaimRow", "Finding", "TimeSensitiveCheck", "CLAIM_TYPES", "COLUMNS",
+    "EPHEMERAL_PATTERNS", "ephemeral_reason", "filter_ephemeral",
     "TIME_SENSITIVE_FRAGMENT", "frontmatter", "merge_time_sensitive",
     "parse_time_sensitive", "render_time_sensitive", "resolve_as_of", "sanitize_cell",
     "stamp_notes",
