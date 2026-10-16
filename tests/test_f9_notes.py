@@ -269,3 +269,91 @@ def test_passage_prompt_forbids_naming_private_individuals(small_run):
     text = flat(lf.render_passage_prompt(plan, plan.passages[0]).text)
     assert "Never name private individuals who are not speakers or organisers" in text
     assert "raffle or giveaway winners, attendees" in text
+
+
+# --- (o) consistency labels, prefix and pointers --------------------------------------
+
+
+def _cons_secs(ch1, ch2):
+    from video2mdnotes.core import consistency as cons
+    return [cons.Section("5", "Advanced Agent Patterns", "3:00:00–4:15:46", [("k5", ch1)]),
+            cons.Section("6", "Sessions", "4:15:46–5:30:00", [("k6", ch2)])]
+
+
+E2C_CH5 = ("### Special Attention\n"
+           "- **Logging suggestions** from Andrew: write structured JSON / JSONL logs so they "
+           "can be parsed and ingested [3:59:48]. Usage/token logging was still missing; he "
+           "guessed the Agent SDK might provide it \"for free\" (not verified) [4:01:58].\n")
+E2C_CH6 = ("### Special Attention\n"
+           "- The Agent SDK gives no visibility into a subagent's internal loop until it "
+           "reports back, so you cannot track spend [4:39:03] [5:03:06].\n")
+
+
+def test_pointer_is_the_citation_of_the_contradicting_clause():
+    from video2mdnotes.core import consistency as cons
+    secs = _cons_secs(E2C_CH5, E2C_CH6)
+    sts = cons.extract_statements(secs)
+    e = next(s.ref for s in sts if "Logging suggestions" in s.text)
+    l = next(s.ref for s in sts if "no visibility" in s.text)
+    pairs = [{"earlier_ref": e, "later_ref": l, "kind": "discrepancy",
+              "resolution": "The later section says the Agent SDK gives no visibility, so "
+                            "spend can't be tracked, against the guess that it provides "
+                            "usage logging for free."}]
+    out, log = cons.apply_contradictions({"k5": E2C_CH5, "k6": E2C_CH6}, sts, pairs)
+    assert '_(discrepancy: see [4:01:58] in ch. 5 "Advanced Agent Patterns")_' in out["k6"]
+    assert "[3:59:48] in ch. 5" not in out["k6"]
+    assert log[0]["pointer"] == "[4:01:58]"
+
+
+def test_superseded_leading_clause_is_prefixed_but_trailing_clause_is_not():
+    from video2mdnotes.core import consistency as cons
+    lead = ("### Special Attention\n- The giveaway winner was NOT announced at the event "
+            "[0:01:53]. Entering requires giving your name [0:01:13].\n")
+    trail = ("### Summary\n- Entering requires giving your name [0:01:13]. The giveaway "
+             "winner was NOT announced at the event [0:01:53].\n")
+    later = "### Summary\n- The winner was drawn at the event from 112 submissions [1:12:26].\n"
+    for ch1, prefixed in ((lead, True), (trail, False)):
+        secs = [cons.Section("1", "Welcome", "0:00:00–0:06:36", [("k1", ch1)]),
+                cons.Section("6", "Intermission", "0:58:36–1:12:58", [("k6", later)])]
+        sts = cons.extract_statements(secs)
+        e = next(s.ref for s in sts if s.section == 1)
+        l = next(s.ref for s in sts if s.section == 2)
+        pairs = [{"earlier_ref": e, "later_ref": l, "kind": "superseded",
+                  "resolution": "The giveaway winner was announced: drawn at the event."}]
+        out, _ = cons.apply_contradictions({"k1": ch1, "k6": later}, sts, pairs)
+        line = next(x for x in out["k1"].split("\n") if "_(superseded" in x)
+        assert line.startswith("- (superseded) ") is prefixed, line
+
+
+def test_partly_contradicted_and_unknown_kinds_are_not_superseded():
+    from video2mdnotes.core import consistency as cons
+    ch2 = ("### Summary\n- Setup of the Agent SDK and Claude Code is not covered in this "
+           "course [0:08:30].\n")
+    ch3 = "### Summary\n- He installed the Agent SDK with pip [0:26:10].\n"
+    secs = [cons.Section("1", "Introduction", "0:00:47–0:10:17", [("k1", ch2)]),
+            cons.Section("2", "SDK Environment Setup", "0:10:17–0:47:36", [("k2", ch3)])]
+    sts = cons.extract_statements(secs)
+    e = next(s.ref for s in sts if s.section == 1)
+    l = next(s.ref for s in sts if s.section == 2)
+    for kind, want in (("partly contradicted", "partly contradicted"),
+                       ("partly_contradicted", "partly contradicted"),
+                       ("contradicts", "discrepancy")):
+        pairs = [{"earlier_ref": e, "later_ref": l, "kind": kind,
+                  "resolution": "A quick pip install is shown later."}]
+        out, log = cons.apply_contradictions({"k1": ch2, "k2": ch3}, sts, pairs)
+        assert log[0]["kind"] == want
+        joined = out["k1"] + out["k2"]
+        assert f"_({want}: see [" in joined and "(superseded)" not in joined
+    # partly contradicted annotates the EARLIER statement
+    pairs = [{"earlier_ref": e, "later_ref": l, "kind": "partly contradicted",
+              "resolution": "A quick pip install is shown later."}]
+    out, _ = cons.apply_contradictions({"k1": ch2, "k2": ch3}, sts, pairs)
+    assert "_(partly contradicted: see [0:26:10]" in out["k1"]
+
+
+def test_consistency_prompt_restricts_superseded():
+    from video2mdnotes.core import consistency as cons
+    system = cons.CONSISTENCY_PROMPT.read_text(encoding="utf-8")
+    assert '`"superseded"` ONLY when the later statement REPLACES' in system
+    assert '`"partly contradicted"`' in system
+    assert 'When unsure, use `"discrepancy"`' in system

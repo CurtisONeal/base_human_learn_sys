@@ -200,7 +200,7 @@ def parse_reply(text: str) -> Tuple[Optional[List[dict]], str]:
         out.append({
             "earlier_ref": str(item.get("earlier_ref") or "").strip(),
             "later_ref": str(item.get("later_ref") or "").strip(),
-            "kind": str(item.get("kind") or "superseded").strip().lower(),
+            "kind": str(item.get("kind") or "discrepancy").strip().lower(),
             "resolution": " ".join(str(item.get("resolution") or "").split()),
         })
     return out, ""
@@ -214,14 +214,72 @@ def _short_title(title: str) -> str:
     return re.sub(r"\s*\([^()]*\)\s*$", "", title).strip() or title
 
 
-def _pointer(st: Statement) -> str:
-    cite = f"{st.cites[0]} " if st.cites else ""
+KINDS = ("superseded", "discrepancy", "partly contradicted")
+_KIND_ALIASES = {"partly_contradicted": "partly contradicted",
+                 "partially contradicted": "partly contradicted",
+                 "partly-contradicted": "partly contradicted", "partial": "partly contradicted"}
+
+
+def fragments(line: str) -> List[Tuple[str, List[str]]]:
+    """A notes line split into (clause text, its citations): each run of
+    citations belongs to the text before it. Text after the last citation
+    (e.g. an existing annotation) is a fragment with no citations."""
+    out: List[Tuple[str, List[str]]] = []
+    pos, text, cites = 0, "", []
+    for m in citations.CITE_RE.finditer(line or ""):
+        gap = line[pos:m.start()]
+        if gap.strip(" .,;:") and cites:
+            out.append((text, cites))
+            text, cites = "", []
+        text += gap
+        cites.append(m.group(0))
+        pos = m.end()
+    if cites:
+        out.append((text, cites))
+    rest = (line or "")[pos:]
+    if rest.strip(" .,;:"):
+        out.append((rest, []))
+    return out
+
+
+def _overlap(a: str, b: str) -> int:
+    ta = {t for t in citations.tokens(a) if t not in citations.STOPWORDS and len(t) > 2}
+    tb = {t for t in citations.tokens(b) if t not in citations.STOPWORDS and len(t) > 2}
+    return len(ta & tb)
+
+
+def best_fragment(line: str, query: str) -> Tuple[int, List[str]]:
+    """(index, citations) of the cited clause of `line` that best matches
+    `query` (the resolution plus the other statement): ties -> earliest."""
+    frags = [(i, f) for i, f in enumerate(fragments(line)) if f[1]]
+    if not frags:
+        return 0, []
+    best = max(frags, key=lambda x: (_overlap(x[1][0], query), -x[0]))
+    return best[0], best[1][1]
+
+
+def _pointer(st: Statement, cite: Optional[str] = None) -> str:
+    """'see [t] in ch. N "Title"' — `cite` is the citation of the clause that
+    actually contradicts (WP-F9: E2c pointed at a statement's FIRST citation,
+    3:59:48, instead of the clause cited 4:01:58)."""
+    cite = cite or (st.cites[0] if st.cites else "")
+    cite = f"{cite} " if cite else ""
     return f'see {cite}in ch. {st.chapter} "{_short_title(st.title)}"'
+
+
+_BULLET = re.compile(r"^(\s*(?:[-*+]|\d+[.)])\s+)")
 
 
 def _annotate_line(line: str, st: Statement, note: str, prefix: bool) -> str:
     """Append `note` to a bullet, or to the claim cell of a table row (and
     prefix the claim with "(superseded)" when `prefix`). Nothing else changes."""
+    if st.kind != "row":
+        if prefix:
+            m = _BULLET.match(line)
+            head, body = (m.group(1), line[m.end():]) if m else ("", line)
+            if not body.lower().startswith(SUPERSEDED_PREFIX):
+                line = f"{head}{SUPERSEDED_PREFIX} {body}"
+        return line.rstrip() + " " + note
     if st.kind == "row":
         cells = line.rstrip().rstrip("|").split("|")
         for k, c in enumerate(cells):
@@ -247,7 +305,12 @@ def apply_contradictions(
     for pair in pairs:
         entry = dict(pair)
         e, l = by_ref.get(pair["earlier_ref"]), by_ref.get(pair["later_ref"])
-        kind = pair.get("kind") if pair.get("kind") in ("superseded", "discrepancy") else "superseded"
+        raw_kind = str(pair.get("kind") or "").strip().lower()
+        kind = _KIND_ALIASES.get(raw_kind, raw_kind)
+        if kind not in KINDS:
+            # An unknown label is not evidence the earlier claim is false:
+            # the weaker annotation (WP-F9 — "superseded" was over-used).
+            kind = "discrepancy"
         entry["kind"] = kind
         if e is None or l is None:
             entry.update(applied=False, reason="unknown reference id")
@@ -262,22 +325,39 @@ def apply_contradictions(
             entry["swapped"] = True
         entry["earlier"] = e.as_dict()
         entry["later"] = l.as_dict()
-        target, other = (e, l) if kind == "superseded" else (l, e)
-        note = f"_({kind}: {_pointer(other)})_"
+        # superseded / partly contradicted: the EARLIER statement is (partly)
+        # wrong and carries the note; discrepancy: the later (quoting) one.
+        target, other = (l, e) if kind == "discrepancy" else (e, l)
         text = lines.get(target.passage)
+        other_text = lines.get(other.passage)
         if text is None or target.line >= len(text):
             entry.update(applied=False, reason="statement line not found")
             log.append(entry)
             continue
         line = text[target.line]
+        # The pointer is the citation of the contradicting CLAUSE of the other
+        # statement, not merely its first citation.
+        query = " ".join([pair.get("resolution", ""), target.text])
+        cite = None
+        if other_text is not None and other.line < len(other_text):
+            _, cs = best_fragment(other_text[other.line], query)
+            cite = cs[0] if cs else None
+        note = f"_({kind}: {_pointer(other, cite)})_"
         if f"_({kind}:" in line:
             entry.update(applied=False, reason=f"already annotated {kind}")
             log.append(entry)
             continue
-        prefix = kind == "superseded" and target.is_time_sensitive
+        # A superseded statement whose LEADING clause is the false one gets
+        # "(superseded)" up front, so a skimmer sees it before the claim.
+        lead = False
+        if kind == "superseded" and target.kind != "row":
+            idx, _ = best_fragment(line, " ".join([pair.get("resolution", ""), other.text]))
+            lead = idx == 0
+        prefix = kind == "superseded" and (target.is_time_sensitive or lead)
         text[target.line] = _annotate_line(line, target, note, prefix)
         entry.update(applied=True, target=target.ref, annotation=note,
-                     time_sensitive_prefix=prefix)
+                     time_sensitive_prefix=prefix and target.is_time_sensitive,
+                     superseded_prefix=prefix, pointer=cite)
         log.append(entry)
     return {k: "\n".join(v) for k, v in lines.items()}, log
 
@@ -365,6 +445,6 @@ def check(
     return ConsistencyResult(annotated, status, "", model, cached, called, len(statements), log)
 
 
-__all__ = ["CACHE_FILENAME", "ConsistencyResult", "Section", "Statement",
-           "apply_contradictions", "check", "extract_statements", "parse_reply",
-           "render_prompt"]
+__all__ = ["CACHE_FILENAME", "ConsistencyResult", "KINDS", "Section", "Statement",
+           "apply_contradictions", "best_fragment", "check", "extract_statements",
+           "fragments", "parse_reply", "render_prompt"]
