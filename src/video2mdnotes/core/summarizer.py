@@ -32,7 +32,11 @@ CLAUDE_CLI_PREFIX = "claude-cli/"
 # anyone choosing to.
 _EXHAUSTION = re.compile(
     r"rate.?limit|usage limit|limit reached|out of (?:usage|credit)|quota|"
-    r"too many requests|\b429\b|exceeded your|upgrade to continue",
+    r"too many requests|\b429\b|exceeded your|upgrade to continue|"
+    # Claude Code CLI wording seen 2026-10-16: "You've hit your session limit ·
+    # resets 9:30am (America/New_York)". Missing it turned a wait into three
+    # failed passages on the E2d run.
+    r"session limit|hit your (?:\w+ )?limit",
     re.IGNORECASE,
 )
 
@@ -44,6 +48,8 @@ _RESET_ABSOLUTE = re.compile(
 # Durations are matched independently rather than anchored to a keyword: an
 # earlier version keyed off "again|after|in" and "try again in 3 hours" matched
 # on "again", then found no digits before "in" and silently gave up.
+# Wall-clock form: "resets 9:30am (America/New_York)" — local time, next occurrence.
+_RESET_CLOCK = re.compile(r"resets?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*([ap]m)\b", re.I)
 _RESET_HOURS = re.compile(r"(\d+)\s*(?:hours?|hrs?|h)\b", re.I)
 _RESET_MINUTES = re.compile(r"(\d+)\s*(?:minutes?|mins?|m)\b", re.I)
 
@@ -68,6 +74,15 @@ def parse_reset_time(text: str, now: dt.datetime | None = None) -> dt.datetime |
             return dt.datetime.fromisoformat(absolute.group(1).replace(" ", "T"))
         except ValueError:
             pass
+
+    clock = _RESET_CLOCK.search(text)
+    if clock:
+        hour = int(clock.group(1)) % 12 + (12 if clock.group(3).lower() == "pm" else 0)
+        minute = int(clock.group(2) or 0)
+        reset = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if reset <= now:
+            reset += dt.timedelta(days=1)
+        return reset
 
     hours = _RESET_HOURS.search(text)
     minutes = _RESET_MINUTES.search(text)

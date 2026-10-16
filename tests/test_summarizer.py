@@ -367,3 +367,19 @@ def test_parse_reset_time_relative(text, hours):
 
 def test_parse_reset_time_absent_returns_none():
     assert parse_reset_time("something else entirely") is None
+
+
+def test_session_limit_wording_is_exhaustion_with_clock_reset():
+    """E2d (2026-10-16): the CLI said "You've hit your session limit · resets
+    9:30am (America/New_York)"; it was not recognised, so passages failed
+    instead of waiting for the reset."""
+    import datetime as dt
+    from video2mdnotes.core.summarizer import _EXHAUSTION
+
+    msg = "claude CLI exited 1: You've hit your session limit · resets 9:30am (America/New_York)"
+    assert _EXHAUSTION.search(msg)
+    now = dt.datetime(2026, 10, 16, 5, 12)
+    assert parse_reset_time(msg, now=now) == dt.datetime(2026, 10, 16, 9, 30)
+    late = dt.datetime(2026, 10, 16, 10, 0)
+    assert parse_reset_time(msg, now=late) == dt.datetime(2026, 10, 17, 9, 30)
+    assert parse_reset_time("resets 4:20am", now=now) == dt.datetime(2026, 10, 17, 4, 20)
