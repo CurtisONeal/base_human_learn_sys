@@ -135,11 +135,11 @@ the hard stop.
 | WP-2 | **done** — merged | e114cb2 | CCA-F: rung=description, 13 ch + preamble, 3 chapters split in 2 (≤12k words), full coverage. WP-3: use path[0] for chapter name; feed groups, not chunk_sections (it would re-merge parts) |
 | WP-4 | **done** — merged | 51e31f6 | CCA-F: 89→0 evaluator mishearings, 104 corrections logged, raw byte-identical. Bare "cloud"(=Claude, ~30) left alone deliberately → WP-3 prompt carries a mishearing hint |
 | WP-8 | **done** — merged | 9358c31 | 339 pass. Open: VLM step bypasses ledger (frames off by default); Nous prices unverified; hermes proxy default 127.0.0.1:8645 |
-| WP-3 | in progress (agent, worktree) | | absorbs WP-7 (prompts/course map) to avoid two agents editing the same prompt path |
+| WP-3 | **done** — merged | 6d30f98, 3328d01 | 492 pass. plan-only CCA-F = 17 passages + 3 map calls. Real smoke (MCP chapter, claude-cli/opus): P1–P7 PASS. Gaps: 12k-word passage vs 900 s CLI timeout untested; real ledger hand-off untested (E1 covers) |
 | WP-5 | **done** — merged | 3f668e5 | notes_format.py; WP-3 MUST call validate_time_sensitive (fill) before stamp_notes or P5 fails |
 | WP-7 | folded into WP-3 | | |
 | WP-6b | pending | | |
-| E1 | pending | | |
+| E1 | running | | chapters 1,2,6,7 (7 is split) → previous_run_results/E1_cca_f_pilot, claude-cli only, concurrency 2 |
 | E2 | pending | | |
 | E3 | pending | | |
 
