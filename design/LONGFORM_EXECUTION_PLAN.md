@@ -134,7 +134,7 @@ the hard stop.
 | WP-6a | in progress (agent, worktree) | | started 2026-10-15 ~22:00 ET |
 | WP-2 | pending | | |
 | WP-4 | pending | | |
-| WP-8 | in progress (agent, worktree) | | started 2026-10-15 ~22:00 ET |
+| WP-8 | **done** — merged | 9358c31 | 339 pass. Open: VLM step bypasses ledger (frames off by default); Nous prices unverified; hermes proxy default 127.0.0.1:8645 |
 | WP-3 | pending | | |
 | WP-5 | pending | | |
 | WP-7 | pending | | |

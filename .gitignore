@@ -145,3 +145,4 @@ downloads/*
 audio_archive/
 audio_archive/*
 model_cache/
+.claude/worktrees/
