@@ -1,0 +1,15 @@
+# CCA-F (YouTube reDRM0tqhNs) chapters, parsed from the video description's
+# "Chapter" list. yt-dlp `chapters` is empty for this video.
+- 00:00:47 Introduction
+- 00:10:17 SDK Environment Setup
+- 00:47:36 Agentic Loop Foundations
+- 01:52:53 Orchestration multi agent architecture
+- 04:15:46 Advanced Agent Patterns
+- 06:47:52 Sessions management context state
+- 07:31:50 Claude code configuration permissions safety
+- 08:58:52 Tooling built in tools usage
+- 09:39:03 Reliability Evaluation Output Quality
+- 10:43:59 Scaling Context Real World Constraints
+- 11:29:51 MCP Ecosystem Integration
+- 11:41:19 Claude Code in CI CD Automation
+- 12:14:57 Scenario Based Architect Patterns
