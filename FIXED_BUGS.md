@@ -13,6 +13,24 @@ Newest first. Format: symptom → cause → fix → how we know.
 
 ---
 
+### `source_meta.json` had no `duration` for the evaluator; the last cue ran past the end
+- **Symptom:** two contract mismatches found by running the long-form path on
+  the CCA-F transcript and grading it with `eval/longform.py`. (1) The evaluator
+  reads yt-dlp's `duration` from `source_meta.json`; `SourceMeta.write` wrote
+  only `duration_s`, so every pipeline-written run dir would have failed P3
+  with "duration unknown" — the evaluator prefers `source_meta.json` over
+  `yt_info.json`, so the duration in the raw dump never got a look in. (Found
+  by reading both sides before the first run, so this one is inferred, not
+  observed.)
+  (2) The last caption line's end is a speech-rate estimate (12:38:34 + 7
+  words ≈ 12:38:37), one second past the real 12:38:36, so the last chapter's
+  range and every heading citing it fell outside the duration: P2 181/185.
+- **Fix:** `write()` adds the yt-dlp aliases (`duration`,
+  `chapters[].start_time`; ignored on read). The long-form plan clamps the last
+  segment's end to `duration_s`. After: P2 185/185, P3 PASS on the mocked full run.
+- **Test:** `test_source_meta_json_carries_evaluator_aliases`,
+  `test_cca_full_13_chapters_end_to_end` (P1–P7 asserted).
+
 ### UTF-16 notes reported as "empty file"; links in headings made locators unusable
 - **Symptom:** two defects, both found only by running the extractor across
   all 1,650 real vault notes rather than the one note used to call it done.
