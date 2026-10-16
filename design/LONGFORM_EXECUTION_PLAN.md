@@ -201,3 +201,6 @@ _(append each run: date, eval, P1–P8 results, cost, decision)_
 - Reviewer judgement: "genuinely useful for someone preparing for the CCA-F … as a structured companion."
 - Defects → **WP-F7**: leaked citation-repair text; cross-batch theme consolidation; ephemeral time-sensitive rows; recording-lag inference (spoken "April 23rd" vs published 2026-07-20); attribution/overstatement prompt rules.
 - WP-F5 merged (cfcf297): segments capped 20 s/60 words via word timings; E3b re-ASR: max segment 19.8 s, max start gap 49.8 s, P3 PASS; words identical (17,507).
+- WP-F7 merged (26c9c71): citation commentary normalised (3 on E2); themes consolidated across batches (≤8); ephemeral time-sensitive rows filtered+logged (5 on E2); recorded_estimate inference (E2 ≈ 2026-04 from "April 23rd"); attribution/overstatement prompt rules.
+- WP-F6 merged (149fafe): `outline` rung — one model call → talk/topic sections, validated+snapped+cached; E3 → 13 titled sections following the talks. Merge conflict (one import line) resolved; 619 pass.
+- Next: E3b notes (new transcript + outline), then E2b confirmation rerun with F7.
