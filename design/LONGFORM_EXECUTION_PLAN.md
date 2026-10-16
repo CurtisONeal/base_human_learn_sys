@@ -132,7 +132,7 @@ the hard stop.
 | WP-0 | **done** — merged | 9fc43cb | 24 tests. Real data: P3 PASS (99.996%, max gap 29 s); transcript has 89 glossary mishearings (67 "cloud code") |
 | WP-1 | **done** — merged | 11775c3 | 15 new tests; 320 pass. Note for WP-6b: `media` still calls whole-file `to_wav()` — must become windowed |
 | WP-6a | in progress (agent, worktree) | | started 2026-10-15 ~22:00 ET |
-| WP-2 | in progress (agent, worktree) | | wave 2, started ~22:40 ET |
+| WP-2 | **done** — merged | e114cb2 | CCA-F: rung=description, 13 ch + preamble, 3 chapters split in 2 (≤12k words), full coverage. WP-3: use path[0] for chapter name; feed groups, not chunk_sections (it would re-merge parts) |
 | WP-4 | in progress (agent, worktree) | | wave 2, started ~22:40 ET |
 | WP-8 | **done** — merged | 9358c31 | 339 pass. Open: VLM step bypasses ledger (frames off by default); Nous prices unverified; hermes proxy default 127.0.0.1:8645 |
 | WP-3 | pending | | |
