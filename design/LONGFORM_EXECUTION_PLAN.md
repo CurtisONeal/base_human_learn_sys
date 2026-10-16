@@ -41,6 +41,9 @@ A full run passes only if **all** hold:
 - **Providers:** Claude subscription (`claude-cli/…`) primary. OpenAI fallback, hard cap
   **$10 total** for this effort, enforced by a cost ledger. Nous (via Hermes) only after the
   OpenAI cap or OpenAI failure; needs `hermes login` (refresh token invalid since 2026-09-25).
+- **Anthropic API credit (~$10) is reserved** for a Fable (`claude-fable-5-1`) advisor on
+  logical dead ends and for the final repo code review. The pipeline must never spend it:
+  no `anthropic/*` model in `LLM_MODELS` for eval runs.
 - **Exhaustion:** if the subscription window runs out, checkpoint and wait for reset;
   do not switch to paid APIs beyond the caps above.
 - **Do not touch** the Hermes gateway's launchd service (known-bad path; see
