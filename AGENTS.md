@@ -90,7 +90,7 @@ If you add a stage that spends money or CPU, put a free check in front of it.
 ## Before you commit
 
 ```bash
-uv sync --extra ocr --extra dev --extra documents --extra semantic
+uv sync --extra ocr --extra dev --extra documents --extra semantic --extra asr-mlx
 .venv/bin/python -m pytest tests/ -q -m "not integration"   # ~5s, 271 tests
 .venv/bin/ruff check src/ tests/
 ```

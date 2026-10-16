@@ -35,6 +35,15 @@ documents = ["pymupdf>=1.24"]
 # present, so this is three small packages.
 semantic = ["fastembed>=0.8"]
 
+# Apple-Silicon ASR backends (core/asr/). MLX runs on the Metal GPU, which
+# faster-whisper (CTranslate2, CPU-only on macOS) cannot use. Optional because
+# MLX does not install on Linux/Windows; a missing package makes the backend
+# report itself unavailable rather than fail import. See design/ASR_BENCHMARK.md.
+asr-mlx = [
+    "parakeet-mlx>=0.3; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "mlx-whisper>=0.4; sys_platform == 'darwin' and platform_machine == 'arm64'",
+]
+
 dev = [
     "pytest>=8.0.0",
     "ruff>=0.3.0",

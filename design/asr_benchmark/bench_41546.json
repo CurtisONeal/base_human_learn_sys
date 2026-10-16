@@ -1,0 +1,255 @@
+{
+  "src": "/Users/s_admin/Documents/agent_set_up/repos/base_human_learn_sys-archived/temp_files/20260830_claude_certified_architect_foundations__prepare_for_and_pass_the_exam.wav",
+  "start": "4:15:46",
+  "start_s": 15346.0,
+  "audio_s": 600.0,
+  "prompt": "Claude Certified Architect - Foundations \u2013 Prepare for and pass the exam!. Keywords: Claude, freecodecamp, Architect, Foundations, exam, Learn, Patterns, code, Certified, CCA-F, Anthropic, official, credential, validating, ability.",
+  "language": "en",
+  "reference": {
+    "kind": "youtube-auto-captions",
+    "lines": 248,
+    "words": 1772,
+    "glossary": {
+      "Claude": 3,
+      "Claude Code": 0,
+      "MCP": 0,
+      "Anthropic": 0,
+      "SDK": 4,
+      "cloud code": 3,
+      "clawed/clawd": 0,
+      "cloud+product": 3
+    }
+  },
+  "runs": [
+    {
+      "backend": "faster-whisper",
+      "model": "large-v3",
+      "spec": "faster-whisper:large-v3",
+      "available": true,
+      "availability": "ok (CPU)",
+      "load_s": 2.3,
+      "prompt_used": true,
+      "wall_s": 341.8,
+      "rtf": 0.5697,
+      "x_realtime": 1.8,
+      "words": 1681,
+      "wer": 0.0779,
+      "wer_detail": {
+        "S": 29,
+        "D": 100,
+        "I": 9,
+        "ref_words": 1772,
+        "engine": "builtin"
+      },
+      "glossary": {
+        "Claude": 6,
+        "Claude Code": 2,
+        "MCP": 0,
+        "Anthropic": 0,
+        "SDK": 4,
+        "cloud code": 1,
+        "clawed/clawd": 0,
+        "cloud+product": 1
+      },
+      "timestamps": {
+        "segments": 19,
+        "first_start_s": 4.5,
+        "last_end_s": 599.99,
+        "monotonic": true,
+        "max_gap_s": 5.31,
+        "median_seg_s": 29.98,
+        "beyond_window": 0
+      },
+      "ts_vs_captions": {
+        "median_s": 1.0457948717948966,
+        "p90_s": 3.7429743589738678,
+        "matched_words": 1615
+      },
+      "language": "en"
+    },
+    {
+      "backend": "faster-whisper",
+      "model": "distil-large-v3",
+      "spec": "faster-whisper:distil-large-v3",
+      "available": true,
+      "availability": "ok (CPU)",
+      "load_s": 1.1,
+      "prompt_used": true,
+      "wall_s": 102.5,
+      "rtf": 0.1708,
+      "x_realtime": 5.9,
+      "words": 1719,
+      "wer": 0.0869,
+      "wer_detail": {
+        "S": 35,
+        "D": 86,
+        "I": 33,
+        "ref_words": 1772,
+        "engine": "builtin"
+      },
+      "glossary": {
+        "Claude": 3,
+        "Claude Code": 0,
+        "MCP": 0,
+        "Anthropic": 0,
+        "SDK": 4,
+        "cloud code": 1,
+        "clawed/clawd": 0,
+        "cloud+product": 1
+      },
+      "timestamps": {
+        "segments": 156,
+        "first_start_s": 4.5,
+        "last_end_s": 599.99,
+        "monotonic": true,
+        "max_gap_s": 1.38,
+        "median_seg_s": 2.84,
+        "beyond_window": 0
+      },
+      "ts_vs_captions": {
+        "median_s": 0.32725543478198915,
+        "p90_s": 1.580000000000382,
+        "matched_words": 1629
+      },
+      "language": "en"
+    },
+    {
+      "backend": "parakeet-mlx",
+      "model": "mlx-community/parakeet-tdt-0.6b-v3",
+      "spec": "parakeet-mlx",
+      "available": true,
+      "availability": "ok (MLX/Metal)",
+      "load_s": 1.1,
+      "prompt_used": false,
+      "wall_s": 15.0,
+      "rtf": 0.025,
+      "x_realtime": 40.0,
+      "words": 1743,
+      "wer": 0.0762,
+      "wer_detail": {
+        "S": 60,
+        "D": 52,
+        "I": 23,
+        "ref_words": 1772,
+        "engine": "builtin"
+      },
+      "glossary": {
+        "Claude": 6,
+        "Claude Code": 2,
+        "MCP": 0,
+        "Anthropic": 0,
+        "SDK": 1,
+        "cloud code": 0,
+        "clawed/clawd": 0,
+        "cloud+product": 0
+      },
+      "timestamps": {
+        "segments": 140,
+        "first_start_s": 4.64,
+        "last_end_s": 599.96,
+        "monotonic": true,
+        "max_gap_s": 1.6,
+        "median_seg_s": 3.28,
+        "beyond_window": 0
+      },
+      "ts_vs_captions": {
+        "median_s": 0.2526753246752378,
+        "p90_s": 0.887888888889222,
+        "matched_words": 1640
+      },
+      "language": null
+    },
+    {
+      "backend": "mlx-whisper",
+      "model": "mlx-community/whisper-large-v3-turbo",
+      "spec": "mlx-whisper:mlx-community/whisper-large-v3-turbo",
+      "available": true,
+      "availability": "ok (MLX/Metal)",
+      "load_s": 0.6,
+      "prompt_used": true,
+      "wall_s": 48.3,
+      "rtf": 0.0805,
+      "x_realtime": 12.4,
+      "words": 1733,
+      "wer": 0.114,
+      "wer_detail": {
+        "S": 37,
+        "D": 102,
+        "I": 63,
+        "ref_words": 1772,
+        "engine": "builtin"
+      },
+      "glossary": {
+        "Claude": 6,
+        "Claude Code": 2,
+        "MCP": 0,
+        "Anthropic": 0,
+        "SDK": 4,
+        "cloud code": 1,
+        "clawed/clawd": 0,
+        "cloud+product": 1
+      },
+      "timestamps": {
+        "segments": 43,
+        "first_start_s": 0.0,
+        "last_end_s": 622.02,
+        "monotonic": true,
+        "max_gap_s": 11.04,
+        "median_seg_s": 9.54,
+        "beyond_window": 1
+      },
+      "ts_vs_captions": {
+        "median_s": 1.112636363636625,
+        "p90_s": 4.740880341880086,
+        "matched_words": 1603
+      },
+      "language": "en"
+    },
+    {
+      "backend": "mlx-whisper",
+      "model": "mlx-community/whisper-large-v3-mlx",
+      "spec": "mlx-whisper:mlx-community/whisper-large-v3-mlx",
+      "available": true,
+      "availability": "ok (MLX/Metal)",
+      "load_s": 2.4,
+      "prompt_used": true,
+      "wall_s": 123.9,
+      "rtf": 0.2065,
+      "x_realtime": 4.8,
+      "words": 1652,
+      "wer": 0.1772,
+      "wer_detail": {
+        "S": 68,
+        "D": 183,
+        "I": 63,
+        "ref_words": 1772,
+        "engine": "builtin"
+      },
+      "glossary": {
+        "Claude": 6,
+        "Claude Code": 2,
+        "MCP": 0,
+        "Anthropic": 0,
+        "SDK": 4,
+        "cloud code": 1,
+        "clawed/clawd": 0,
+        "cloud+product": 1
+      },
+      "timestamps": {
+        "segments": 165,
+        "first_start_s": 0.0,
+        "last_end_s": 599.96,
+        "monotonic": true,
+        "max_gap_s": 28.74,
+        "median_seg_s": 3.0,
+        "beyond_window": 0
+      },
+      "ts_vs_captions": {
+        "median_s": 0.3828571428569916,
+        "p90_s": 1.1890000000003056,
+        "matched_words": 1493
+      },
+      "language": "en"
+    }
+  ]
+}
