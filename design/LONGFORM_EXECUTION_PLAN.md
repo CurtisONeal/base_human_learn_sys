@@ -140,8 +140,8 @@ the hard stop.
 | WP-7 | folded into WP-3 | | |
 | WP-6b | **done** — merged | 1c9ce1f, 0ea99a1 | E3 ASR: 4 parts auto-grouped, parakeet 8 windows, 223 s wall, 17,507 words, gate PASS (coverage 100 %, span 99.96 %, max gap 48 s); seam-duplicate bug found+fixed; resume verified (re-stitch 1.9 s) |
 | E1 | **PASS** (E1b: P1–P7 + P8 20/20) | | see eval log; WP-F4 polish before E2 |
-| E2 | P1–P7 PASS; P8 under review | | 9 min, 17 passages, 38,978 words |
-| E3 | ASR done (WP-6b); notes run in progress | | |
+| E2 | **PASS** (P1–P7 + P8 16/0 partial 1/0 unsupported) | | 9 min, 17 passages, 38,978 words; polish WP-F7 |
+| E3 | P3 FAIL (coarse ASR segment) → WP-F5/F6 running | | |
 
 ## Eval log
 
@@ -194,3 +194,9 @@ _(append each run: date, eval, P1–P8 results, cost, decision)_
 - P3 root cause: parakeet emitted one 229-word segment (~2 min); md stores start times only, so start-to-start gap = 123 s although the ASR gate (end times) saw max 48 s. Real defect: coarse citations.
 - Usefulness defect (not in the bar): cue-rung sections cut across talks and carry generic titles, while the Course Map itself identifies the 5+ talks.
 - Fix packages: **WP-F5** split long ASR segments at sentence/token timestamps (cap 20 s / 60 words), store timings in checkpoints; re-ASR into E3b. **WP-F6** `outline` structure rung (one model call → talk/topic boundaries + titles, validated, snapped, cached, fallback to cues).
+
+### E2 P8 result
+- **P8 PASS: 16 SUPPORTED · 1 PARTIAL · 0 UNSUPPORTED · 3 N/A.** **E2 (full 12.6 h CCA-F) passes the approved bar P1–P8.**
+- Splits at 2:57:30, 5:29:13, 8:19:35: no loss; minor reinforcing overlap. Course map ranges exact; themes topics-not-verdicts but fragmented across batches. MCP chapter + Introduction: nothing important missing.
+- Reviewer judgement: "genuinely useful for someone preparing for the CCA-F … as a structured companion."
+- Defects → **WP-F7**: leaked citation-repair text; cross-batch theme consolidation; ephemeral time-sensitive rows; recording-lag inference (spoken "April 23rd" vs published 2026-07-20); attribution/overstatement prompt rules.
