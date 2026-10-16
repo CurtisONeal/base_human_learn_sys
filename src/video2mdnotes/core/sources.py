@@ -46,6 +46,17 @@ class Section(BaseModel):
     # Where in the container this came from, for re-extraction and debugging.
     href: Optional[str] = None
 
+    # Media only (see core/structure.py). A document section leaves these None.
+    # start_s/end_s are the section's time range; `group_id` ties the parts of
+    # one split chapter together (same id, `part` 1..`parts`), so a caller can
+    # run parts of one chapter sequentially while different groups run in
+    # parallel. An unsplit section has its own group_id and part=parts=1.
+    start_s: Optional[float] = None
+    end_s: Optional[float] = None
+    group_id: Optional[str] = None
+    part: Optional[int] = None
+    parts: Optional[int] = None
+
     @property
     def title(self) -> str:
         return self.path[-1] if self.path else ""
