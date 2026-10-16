@@ -2,7 +2,7 @@ import datetime as dt
 import re
 from collections import Counter
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 from pydantic import BaseModel
 from faster_whisper import WhisperModel
 from rich.progress import Progress, SpinnerColumn, TextColumn
@@ -26,11 +26,24 @@ _STOPWORDS = {
     "let", "lets", "its", "it's", "i'm", "we're", "don't", "we", "you're",
 }
 
-class Segment(BaseModel):
-    """Represents a single segment of transcribed text."""
+class Word(BaseModel):
+    """One timed word (or sub-word token run) inside a segment."""
     start: float
     end: float
     text: str
+
+
+class Segment(BaseModel):
+    """Represents a single segment of transcribed text.
+
+    `words` carries the engine's word/token timings when it reports them;
+    `core/asr/segmenting.py` uses them to split over-long segments at the
+    real word times instead of guessing proportionally.
+    """
+    start: float
+    end: float
+    text: str
+    words: Optional[List[Word]] = None
 
 class TranscriptResult(BaseModel):
     """Represents the full transcription result."""
@@ -213,6 +226,11 @@ def transcribe_audio(audio_path: Path, title: str = "Unknown", initial_prompt: s
         segments_list.append(seg_obj)
         full_text_parts.append(segment.text)
 
+    # Same segment-length cap as the core/asr backends (no word timings on
+    # this path, so long segments are split proportionally at punctuation).
+    from video2mdnotes.core.asr.segmenting import split_long_segments
+
+    segments_list = split_long_segments(segments_list)
     full_text = "".join(full_text_parts)
     
     # Generate Markdown

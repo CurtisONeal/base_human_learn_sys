@@ -317,6 +317,12 @@ class Settings(BaseSettings):
     asr_min_coverage: float = 0.98
     # Window silence detection (ffmpeg silencedetect) — what counts as silent.
     asr_silence_db: float = -40.0
+    # Segment-length cap (core/asr/segmenting.py), every backend: a segment
+    # longer than either is split at sentence/clause breaks using the engine's
+    # word timings. The transcript stores start times only, so a long segment
+    # is both a citation-precision loss and a false "gap" to the evaluator.
+    asr_max_segment_s: float = 20.0
+    asr_max_segment_words: int = 60
 
     # File Paths (defaults are relative to project root)
     output_dir: Path = BASE_DIR / "previous_run_results"

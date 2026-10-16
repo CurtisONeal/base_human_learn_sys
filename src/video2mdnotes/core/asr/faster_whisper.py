@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
 from video2mdnotes.core.asr.base import (
-    BackendUnavailable, Segment, clip_to_duration, module_available, wav_duration,
+    BackendUnavailable, Segment, Word, finalize_segments, module_available,
+    wav_duration,
 )
 
 DEFAULT_MODEL = "large-v3"
@@ -67,7 +68,16 @@ class FasterWhisperBackend:
             beam_size=self.beam_size,
             vad_filter=self.vad_filter,
             initial_prompt=initial_prompt or None,
+            word_timestamps=True,
         )
-        out = [Segment(start=s.start, end=s.end, text=s.text) for s in segments]
+        out = [Segment(start=s.start, end=s.end, text=s.text, words=_words(s))
+               for s in segments]
         self.last_language = getattr(info, "language", None) or language
-        return clip_to_duration(out, wav_duration(wav_path))
+        return finalize_segments(out, wav_duration(wav_path))
+
+
+def _words(seg) -> Optional[List[Word]]:
+    ws = getattr(seg, "words", None) or []
+    out = [Word(start=float(w.start), end=float(w.end), text=w.word) for w in ws
+           if getattr(w, "word", None)]
+    return out or None

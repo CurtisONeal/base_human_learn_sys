@@ -44,7 +44,8 @@ from video2mdnotes.core.asr import get_backend
 from video2mdnotes.core.asr.base import (
     AsrBackend, BackendUnavailable, clip_to_duration, wav_duration,
 )
-from video2mdnotes.core.transcriber import Segment, TranscriptResult, generate_markdown
+from video2mdnotes.core.asr.segmenting import split_long_segments
+from video2mdnotes.core.transcriber import Segment, TranscriptResult, Word, generate_markdown
 
 MANIFEST_FILENAME = "asr_manifest.json"
 CHECKPOINT_VERSION = 1
@@ -530,8 +531,7 @@ def transcribe_long(
             "prompt_used": bool(initial_prompt and backend.supports_prompt),
             "timings": timings,
             "completed_at": dt.datetime.now().isoformat(timespec="seconds"),
-            "segments": [{"start": round(s.start, 3), "end": round(s.end, 3), "text": s.text}
-                         for s in segs],
+            "segments": [_segment_record(s) for s in segs],
         }
         _atomic_write_json(ck_path, data)
         records.append((part, w, data))
@@ -609,14 +609,35 @@ def transcribe_long(
     return out
 
 
+def _segment_record(s: Segment) -> dict:
+    """One checkpointed segment. `words` = [[start, end, text], ...] (window-
+    relative) when the engine reported word/token timings — kept so a later
+    re-segmentation (segment-length cap) never needs the ASR re-run."""
+    rec = {"start": round(s.start, 3), "end": round(s.end, 3), "text": s.text}
+    if s.words:
+        rec["words"] = [[round(w.start, 3), round(w.end, 3), w.text] for w in s.words]
+    return rec
+
+
+def _segment_from_record(rec: dict, base: float) -> Segment:
+    words = rec.get("words")
+    return Segment(
+        start=base + rec["start"], end=base + rec["end"], text=rec["text"],
+        words=[Word(start=base + a, end=base + b, text=t) for a, b, t in words]
+        if words else None,
+    )
+
+
 def stitch(records: Sequence[Tuple[Part, Window, dict]]) -> List[Segment]:
-    """Checkpointed window segments -> one absolute timeline, overlaps deduped."""
+    """Checkpointed window segments -> one absolute timeline, overlaps deduped,
+    over-long segments split (core/asr/segmenting.py — idempotent, so checkpoints
+    written before the cap existed are capped here, proportionally when they
+    carry no word timings)."""
     out: List[Segment] = []
     prev: Optional[Tuple[Window, Part, List[Segment]]] = None
     for part, w, data in records:
         base = part.offset_s + w.ext_start
-        segs = [Segment(start=base + s["start"], end=base + s["end"], text=s["text"])
-                for s in data.get("segments", [])]
+        segs = [_segment_from_record(s, base) for s in data.get("segments", [])]
         if prev is not None and prev[1].index == part.index:
             pw, pp, psegs = prev
             kept_prev, segs = dedupe_overlap(psegs, pp.offset_s + pw.ext_end,
@@ -628,7 +649,7 @@ def stitch(records: Sequence[Tuple[Part, Window, dict]]) -> List[Segment]:
     if prev is not None:
         out.extend(prev[2])
     out.sort(key=lambda s: (s.start, s.end))
-    return out
+    return split_long_segments(out)
 
 
 # --- completeness gate -------------------------------------------------------

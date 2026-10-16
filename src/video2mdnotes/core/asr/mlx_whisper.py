@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from video2mdnotes.core.asr.base import (
-    BackendUnavailable, Segment, clip_to_duration, is_apple_silicon,
+    BackendUnavailable, Segment, Word, finalize_segments, is_apple_silicon,
     module_available, wav_duration,
 )
 
@@ -63,10 +63,18 @@ class MlxWhisperBackend:
             initial_prompt=initial_prompt or None,
             language=language,
             verbose=None,
+            word_timestamps=True,
         )
         self.last_language = result.get("language") or language
         segs = [
-            Segment(start=float(s["start"]), end=float(s["end"]), text=s["text"])
+            Segment(start=float(s["start"]), end=float(s["end"]), text=s["text"],
+                    words=_words(s))
             for s in result.get("segments", [])
         ]
-        return clip_to_duration(segs, wav_duration(wav_path))
+        return finalize_segments(segs, wav_duration(wav_path))
+
+
+def _words(seg: dict) -> Optional[List[Word]]:
+    out = [Word(start=float(w["start"]), end=float(w["end"]), text=w["word"])
+           for w in seg.get("words") or [] if w.get("word")]
+    return out or None
