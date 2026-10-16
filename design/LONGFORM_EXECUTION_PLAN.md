@@ -139,10 +139,17 @@ the hard stop.
 | WP-5 | **done** — merged | 3f668e5 | notes_format.py; WP-3 MUST call validate_time_sensitive (fill) before stamp_notes or P5 fails |
 | WP-7 | folded into WP-3 | | |
 | WP-6b | pending | | |
-| E1 | running | | chapters 1,2,6,7 (7 is split) → previous_run_results/E1_cca_f_pilot, claude-cli only, concurrency 2 |
+| E1 | P1–P7 PASS; P8 under review | | see eval log |
 | E2 | pending | | |
 | E3 | pending | | |
 
 ## Eval log
 
 _(append each run: date, eval, P1–P8 results, cost, decision)_
+
+### 2026-10-15 22:35–22:40 ET · E1 pilot (CCA-F chapters 1, 2, 6, 7; ch 7 split in 2)
+- Run: 5 passage calls + 1 course-map call, claude-cli only, concurrency 2, 4 min 44 s wall, $0 metered.
+- Notes: 12,260 words. Ledger written for every passage; 07_p1 ledger carried into 07_p2.
+- P1 PASS 4/4 · P2 PASS 809/809 · P3 PASS 99.996 % · P4 PASS · P5 PASS 50/50 · P6 PASS 0 · P7 PASS 104/104.
+  (First grading showed P1 FAIL — the managing agent's expected-chapters grep produced an empty file; regraded with a correct file.)
+- P8: independent reviewer running (20 of 343 cited claims). Also checking split-chapter continuity.
