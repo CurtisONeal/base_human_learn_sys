@@ -37,6 +37,21 @@ The passage transcript is right there, so the check is mechanical:
      by ≥ ``RETARGET_MARGIN``. The new timestamp is the caption line in that
      region with the most term weight within ±``LOCAL_S`` (latest on ties —
      where the statement is complete).
+
+     Precision guards (WP-F4 — E1b moved a CORRECT "`/sandbox` didn't detect
+     them until he started a new session" from 8:23:35, where "sandbox" is
+     said, to 8:30:19 on the generic words "start" and "session"). Only
+     *justifying* terms count here — strong terms plus RARE content words
+     (said on at most ``RARE_DF`` caption lines of the passage); generic words
+     never justify a move:
+
+     - never retarget when the ORIGINAL location (caption lines within
+       ±``ORIGIN_S`` of the cited time: the cited line and its neighbours)
+       already holds any justifying term of the claim;
+     - the new line must hold a justifying term within ±``LOCAL_S``, and the
+       target window every strong term of the bullet — so the justifying
+       evidence at the target is strictly stronger than at the origin (which
+       has none), not merely the overall / content-word score.
    * **unverified** (``citation:unverified``) — none of the unit's strong
      terms occurs anywhere in the passage and content coverage at the
      citation is < ``UNVERIFIED_MAX_COVERAGE``. `` _(unverified citation)_``
@@ -64,6 +79,12 @@ OK_CONTENT = 0.4
 RETARGET_MIN = 0.6
 RETARGET_MARGIN = 0.25
 UNVERIFIED_MAX_COVERAGE = 0.3
+# The "original location" for the no-retarget guard: the cited caption line and
+# its immediate neighbours (lines are ~2 s long). Deliberately NOT the ±60 s
+# scoring window: E1's wrong jq citation [8:09:43] has an unrelated "JQ" 8 s
+# later, while E1b's correct [8:23:35] has "sandbox" on the cited line itself.
+ORIGIN_S = 5.0
+RARE_DF = 2            # a content word said on <= 2 caption lines is "rare"
 CLUSTER_GAP_S = 60.0
 UNVERIFIED_MARK = "_(unverified citation)_"
 AUDIT_FILENAME = "citation_audit.json"
@@ -172,6 +193,19 @@ class Change:
         if self.coverage_new is not None:
             d["coverage_new"] = round(self.coverage_new, 2)
         return d
+
+
+# Leftover markers inside a citation, e.g. ``[7:55:55 n/a]`` (E1b: written by the
+# model; CITE_RE does not match them, so they reached the notes as plain text).
+_MARKER_RE = re.compile(
+    rf"\[\s*(?P<ts>{_TS}(?:\s*(?:-|–|—|to)\s*{_TS})?)\s*[,;:]?\s*"
+    r"(?:n\s*/\s*a|n\.a\.?|na|\?+|tbd|unknown|unclear|approx\.?|est\.?|~)\s*\]",
+    re.I)
+
+
+def normalize_citation_markers(text: str) -> Tuple[str, int]:
+    """``[7:55:55 n/a]`` -> ``[7:55:55]``. Returns (text, number changed)."""
+    return _MARKER_RE.subn(lambda m: f"[{m.group('ts')}]", text or "")
 
 
 def _parse_ts(ts: str) -> float:
@@ -403,6 +437,16 @@ class _Scorer:
         self.strong_w = sum(t.weight for k, t in enumerate(terms) if t.strong and k in occ)
         self.content_w = sum(t.weight for k, t in enumerate(terms) if not t.strong and k in occ)
 
+    def justifying(self, k: int) -> bool:
+        """Strong term, or a content word RARE in this passage."""
+        t = self.terms[k]
+        return t.strong or (0 < t.df <= RARE_DF and len(t.text) >= 4)
+
+    def justify_count(self, t: float, d: float) -> int:
+        """Justifying terms said within ±d of t (generic words never count)."""
+        return sum(1 for k, times in self.occ.items()
+                   if self.justifying(k) and PassageIndex._near(times, t, d))
+
     def at(self, lo: float, hi: float) -> _Score:
         mid, half = (lo + hi) / 2, (hi - lo) / 2
         present = {k for k, times in self.occ.items() if PassageIndex._near(times, mid, half)}
@@ -451,7 +495,11 @@ def judge(unit: Unit, index: PassageIndex) -> Optional[Change]:
         if s.strong >= 1.0 and s.content >= cited.content:
             scores.append((t, s.overall))
     best = max((o for _, o in scores), default=0.0)
-    if (len(unit.cites) == 1 and best >= RETARGET_MIN
+    # WP-F4: the cited line already says a strong / rare term of the claim ->
+    # the citation is defensible; generic-word coverage elsewhere never wins.
+    origin_holds = any(sc.justify_count(t, ORIGIN_S) > 0
+                       for a, b, _ in unit.cites for t in {a, b})
+    if (len(unit.cites) == 1 and not origin_holds and best >= RETARGET_MIN
             and best >= cited.overall + RETARGET_MARGIN):
         good = [t for t, o in scores if o >= best - 0.1]
         cited_lo = unit.cites[0][0] - WINDOW_S
@@ -460,7 +508,7 @@ def judge(unit: Unit, index: PassageIndex) -> Optional[Change]:
         far = [r for r in regions if not (r[1] >= cited_lo and r[0] <= cited_hi)]
         if len(regions) == 1 and len(far) == 1:
             new_t = _pick_line(sc, index, far[0])
-            if new_t is not None:
+            if new_t is not None and sc.justify_count(new_t, LOCAL_S) > 0:
                 new = sc.at(new_t - WINDOW_S, new_t + WINDOW_S)
                 return Change("citation:retarget", unit.line, unit.section, unit.text, orig,
                               hms(new_t), show, cited.overall, new.overall)
@@ -508,8 +556,9 @@ def audit_notes(notes: str, caption_lines: Sequence[Tuple[float, str]]) -> Tuple
     if not caption_lines:
         return notes, []
     index = PassageIndex(caption_lines)
-    lines = notes.split("\n")
     entries: List[dict] = []
+    notes, n_markers = normalize_citation_markers(notes)
+    lines = notes.split("\n")
     for unit in iter_units(notes):
         ch = judge(unit, index)
         if ch is None:
@@ -524,10 +573,15 @@ def audit_notes(notes: str, caption_lines: Sequence[Tuple[float, str]]) -> Tuple
                 continue
             lines[unit.line] = _mark_unverified(line, unit.kind)
         entries.append(ch.as_dict())
+    if n_markers:
+        entries.append({"rule": "citation:normalized", "changed": True, "count": n_markers,
+                        "original_ts": None, "new_ts": None,
+                        "claim": "leftover marker inside a citation removed, e.g. [H:MM:SS n/a]"})
     return "\n".join(lines), entries
 
 
 __all__ = [
     "AUDIT_FILENAME", "UNVERIFIED_MARK", "WINDOW_S", "PassageIndex", "Term", "Unit",
-    "audit_notes", "extract_terms", "iter_units", "judge", "tokens",
+    "audit_notes", "extract_terms", "iter_units", "judge", "normalize_citation_markers",
+    "tokens",
 ]

@@ -21,6 +21,8 @@ Every transcript line in the passage starts with its timestamp, e.g.
 `[1:23:45] text`. Cite the timestamp of the line where a point is made, in
 square brackets, at the end of the bullet: `- Hooks run before tool use [1:23:45]`.
 Use only timestamps that appear in the passage. Never invent or round one.
+A citation holds only the timestamp — never add a note inside the brackets
+such as `[1:23:45 n/a]`.
 Every bullet that states a fact from the recording carries a citation.
 
 - Cite the caption line that STATES the claim — where the command, result or

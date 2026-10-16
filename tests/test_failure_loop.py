@@ -196,8 +196,10 @@ def test_chapters_total_excludes_preamble(small_run, tmp_path):
     out = tmp_path / "out"
     result = lf.run_longform(small_run, out, complete=MockLLM(), max_words=800,
                              progress=lambda m: None)
-    fm, _ = ev.split_frontmatter(result.summary_path.read_text())
+    notes = result.summary_path.read_text()
+    fm, _ = ev.split_frontmatter(notes)
     assert fm["chapters_total"] == 3 and fm["chapters_included"] == 3
+    assert "over 3 of 3 chapter(s) (" in notes
 
 
 def test_chapters_total_with_a_preamble(small_run):
@@ -206,11 +208,29 @@ def test_chapters_total_with_a_preamble(small_run):
                       part=1, parts=1, start_s=0, end_s=1, span=(0, 1), words=3)]
     plan.chapters = [pre] + plan.chapters
     plan.selected = list(plan.chapters)
-    notes_by_key = {p.key: "### Summary\n- x [0:00:00]\n" for p in plan.passages}
+    notes_by_key = {p.key: "### Summary\n- x [0:00:00]\n- y [0:00:01 n/a]\n"
+                    for p in plan.passages}
     final, _ = lf.assemble(plan, notes_by_key, "## Course Map\n", [], "run")
     fm, _ = ev.split_frontmatter(final)
     assert fm["chapters_total"] == 3 and fm["chapters_included"] == 3
     assert fm["preamble_included"] is True
+    # WP-F4: the header line counts chapters the same way (E1b: "4 of 14" for 13).
+    assert "over 3 of 3 chapter(s) + preamble (" in final
+    assert "of 4 chapter(s)" not in final
+    # Leftover citation markers in (pre-WP-F4) chunk notes do not reach the notes.
+    assert "n/a]" not in final and "- y [0:00:01]" in final
+
+
+def test_partial_header_excludes_preamble(small_run):
+    plan = lf.build_plan(small_run, max_words=800, write=False)
+    pre = [lf.Passage(key="00_preamble_p1", chapter_no=0, title="Preamble", group_id="ch00",
+                      part=1, parts=1, start_s=0, end_s=1, span=(0, 1), words=3)]
+    plan.chapters = [pre] + plan.chapters
+    plan.selected = plan.chapters[1:3]
+    notes_by_key = {p.key: "### Summary\n- x [0:00:00]\n" for p in plan.passages}
+    final, _ = lf.assemble(plan, notes_by_key, "## Course Map\n", [], "run")
+    fm, _ = ev.split_frontmatter(final)
+    assert "over 2 of 3 chapter(s) (" in final and fm["chapters_total"] == 3
 
 
 def test_fact_checked_wording_rule_in_prompt_and_output(small_run):
@@ -219,6 +239,12 @@ def test_fact_checked_wording_rule_in_prompt_and_output(small_run):
     assert 'write "per model knowledge (cutoff uncertain)"' in text
     assert 'Never write "correct as of <published date>"' in text
     assert "write \"correct as of <published date>; may have changed since\"" not in text
+    # WP-F4: neutral voice, no first person (E1b: "my knowledge cutoff", "I can't confirm").
+    assert "Write these notes in a neutral, impersonal voice — never first person." in text
+    assert 'Do not write "my knowledge cutoff", "I can\'t confirm"' in text
+    assert "your knowledge cutoff" not in text and "say that you cannot confirm" not in text
+    # citations carry no inline markers
+    assert "never add a note inside the brackets such as `[1:23:45 n/a]`" in text
 
     fix = lf.fix_fact_checked_wording
     m = plan.meta

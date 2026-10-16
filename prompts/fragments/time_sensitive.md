@@ -51,7 +51,13 @@ recording), say so: write "per model knowledge (cutoff uncertain)". Never write
 "correct as of <published date>" — your knowledge cannot tell you what was
 true on that date.
 
-State your own uncertainty explicitly: your knowledge has a cutoff and you
-cannot see changes after it. When the published date is after, or close to,
-your knowledge cutoff, say that you cannot confirm or refute the claim and
+State the uncertainty explicitly: model knowledge has a cutoff and cannot see
+changes after it. When the published date is after, or close to, that cutoff,
+say that the claim cannot be confirmed or refuted from model knowledge and
 point to its verify-by check rather than asserting either way.
+
+Write these notes in a neutral, impersonal voice — never first person. Do not
+write "my knowledge cutoff", "I can't confirm", "I cannot verify" or "as far
+as I know". Write instead, e.g.: "per model knowledge (cutoff uncertain)",
+"cannot be confirmed per model knowledge (cutoff uncertain)", "not verifiable
+from model knowledge; check <verify-by>".

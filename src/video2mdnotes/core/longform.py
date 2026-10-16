@@ -1132,11 +1132,23 @@ def _audit_line(audit: Sequence[dict]) -> Optional[str]:
     return "> Citation audit: " + "; ".join(parts) + f" — see `{citations.AUDIT_FILENAME}`."
 
 
+def _chapter_counts(plan: Plan) -> dict:
+    """The preamble (chapter_no 0) is not a chapter (WP-F3/F4): one definition
+    for the frontmatter and the header line — E1b said "4 of 14" for 13."""
+    return {
+        "chapters_total": sum(1 for ch in plan.chapters if ch[0].chapter_no),
+        "chapters_included": sum(1 for ch in plan.selected if ch[0].chapter_no),
+        "preamble_included": any(ch[0].chapter_no == 0 for ch in plan.selected),
+    }
+
+
 def _source_block(plan: Plan, models: Sequence[str], partial: bool,
                   audit: Sequence[dict] = ()) -> str:
     m = plan.meta
     corrected = quality.corrected_path_for(plan.out_dir / "transcripts" / plan.raw_transcript.name).name
     total = sum(len(ch) for ch in plan.chapters)
+    counts = _chapter_counts(plan)
+    pre = " + preamble" if counts["preamble_included"] else ""
     lines = [
         f"# {m.title or plan.name}",
         "",
@@ -1144,8 +1156,9 @@ def _source_block(plan: Plan, models: Sequence[str], partial: bool,
         f"> {prompt_header(m, plan.provenance_label)}",
         f"> Structure: {plan.structure.provenance} (rung: {plan.structure.rung}"
         f"{', INFERRED' if plan.structure.structure_is_inferred else ''})",
-        f"> Notes: {len(plan.passages)} passage(s) over {len(plan.selected)} of "
-        f"{len(plan.chapters)} chapter(s) ({total} passages in all); profile: {plan.profile}; "
+        f"> Notes: {len(plan.passages)} passage(s) over {counts['chapters_included']} of "
+        f"{counts['chapters_total']} chapter(s){pre} ({total} passages in all); "
+        f"profile: {plan.profile}; "
         f"models: {', '.join(sorted(set(models))) or 'none'}",
         f"> Transcript: `transcripts/{corrected}` ({len(plan.corrections)} glossary "
         f"corrections, logged in `corrections.json`); raw `transcripts/{plan.raw_transcript.name}` "
@@ -1177,6 +1190,8 @@ def assemble(plan: Plan, notes_by_key: Dict[str, str], course_map_md: str,
     blocks.append(uncertainty_md)
     blocks.append(_merge_fact_checked(plan, notes_by_key))
     body = "\n".join(b.rstrip() + "\n" for b in blocks)
+    # Chunks audited before WP-F4 can still carry `[7:55:55 n/a]` (model output).
+    body = citations.normalize_citation_markers(body)[0]
 
     # Time-sensitive claims: merge -> validate(fill) -> stamp. validate MUST
     # come first: a model row without a date fails P5 otherwise.
@@ -1197,9 +1212,7 @@ def assemble(plan: Plan, notes_by_key: Dict[str, str], course_map_md: str,
             "structure_is_inferred": plan.structure.structure_is_inferred,
             "longform_profile": plan.profile,
             # The preamble is not a chapter (WP-F3): E1 said 14 for 13 chapters.
-            "chapters_total": sum(1 for ch in plan.chapters if ch[0].chapter_no),
-            "chapters_included": sum(1 for ch in plan.selected if ch[0].chapter_no),
-            "preamble_included": any(ch[0].chapter_no == 0 for ch in plan.selected),
+            **_chapter_counts(plan),
             "passages": len(plan.passages),
             "partial": partial,
         },

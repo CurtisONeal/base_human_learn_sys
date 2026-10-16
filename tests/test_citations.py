@@ -157,3 +157,117 @@ def test_e1_replay_retargets_the_two_reviewer_findings(tmp_path):
             assert (run / "chunk_summaries" / name).read_text() == text
     log = json.loads((run / cit.AUDIT_FILENAME).read_text())
     assert sum(1 for e in log if e["rule"] == "citation:retarget") == 2
+
+
+# --- WP-F4: retarget precision (E1b) ------------------------------------------------
+
+FIXTURES = Path(__file__).resolve().parent / "fixtures" / "citations"
+
+
+def _secs(ts):
+    h, m, s = ts.split(":")
+    return int(h) * 3600 + int(m) * 60 + float(s)
+
+
+def _e1b_p2_lines():
+    """Real E1b caption lines of passage 07 p2 (8:19:35-8:58:52): the two
+    regions in full (8:22:27-8:24:40 and 8:29:30-8:31:10) plus every other
+    line of the passage that says a claim word, so those words' passage
+    frequencies are the real ones. The gaps get neutral filler lines so the
+    passage length (and with it idf) is close to the real 997 lines."""
+    import bisect
+    import re
+    real = []
+    for line in (FIXTURES / "e1b_p2_sandbox.md").read_text().splitlines():
+        m = re.match(r"- \[(\d+:\d\d:\d\d\.\d+)\] (.*)", line)
+        if m:
+            real.append((_secs(m.group(1)), m.group(2)))
+    times = sorted(t for t, _ in real)
+    out = list(real)
+    for i in range(1200):
+        t = float(round(_secs("8:19:35") + 2.0 * i))
+        k = bisect.bisect_left(times, t - 2.0)
+        if not (k < len(times) and times[k] <= t + 2.0):
+            out.append((t, "and so we keep going with this part of the demo"))
+    return sorted(out)
+
+
+E1B_SANDBOX = ("### Special Attention\n- After installing sandbox dependencies, `/sandbox` "
+               "didn't detect them until he started a new session [8:23:35]\n")
+
+
+def test_e1b_correct_sandbox_citation_is_not_retargeted():
+    # 8:23:33 "We'll go back up to sandbox" is the cited line; 8:30:19 ("I'm
+    # starting to notice ...", then "for a session") shares only generic words.
+    audited, log = cit.audit_notes(E1B_SANDBOX, _e1b_p2_lines())
+    assert audited == E1B_SANDBOX
+    assert not [e for e in log if e["rule"] == "citation:retarget"]
+
+
+def test_e1b_fixture_reproduces_the_old_false_retarget(monkeypatch):
+    # Control: without the origin guard the fixture still makes E1b's move, so
+    # the test above tests the guard, not a fixture that lost the defect.
+    monkeypatch.setattr(cit, "ORIGIN_S", 0.0)
+    audited, log = cit.audit_notes(E1B_SANDBOX, _e1b_p2_lines())
+    assert [(e["rule"], e["new_ts"]) for e in log] == [("citation:retarget", "8:30:19")]
+
+
+def test_no_retarget_when_the_cited_line_says_a_strong_term():
+    # jq is said on the cited line; a richer region elsewhere does not win.
+    lines = [(t, "and jq is denied here" if t == 300.0 else x) for t, x in _passage()]
+    notes = "- Reading the file directly instead of jq [0:05:00]\n"
+    audited, log = cit.audit_notes(notes, lines)
+    assert audited == notes
+    assert not [e for e in log if e["rule"] == "citation:retarget"]
+    # ...and the same claim cited 8 s away from that "jq" (E1's [8:09:43]) still moves.
+    audited, log = cit.audit_notes("- Reading the file directly instead of jq [0:04:52]\n", lines)
+    assert [e["rule"] for e in log] == ["citation:retarget"]
+    assert abs(_secs(log[0]["new_ts"]) - 60) <= 10
+
+
+def test_leftover_citation_marker_is_normalized():
+    lines = [(float(t), f"line {t} about language and Japanese") for t in range(0, 300, 5)]
+    notes = ("- He set `language` to Japanese [0:01:00][0:02:00 n/a][0:01:05].\n"
+             "- Grep [0:00:50 N/A][0:02:30]\n")
+    audited, log = cit.audit_notes(notes, lines)
+    assert "n/a" not in audited.lower()
+    assert "[0:01:00][0:02:00][0:01:05]." in audited and "Grep [0:00:50][0:02:30]" in audited
+    assert [e["count"] for e in log if e["rule"] == "citation:normalized"] == [2]
+    assert cit.normalize_citation_markers("[7:55:55 n/a] [1:02 ?] [0:01:00]") == \
+        ("[7:55:55] [1:02] [0:01:00]", 2)
+    again, log2 = cit.audit_notes(audited, lines)
+    assert again == audited and not [e for e in log2 if e["rule"] == "citation:normalized"]
+
+
+def _find_run(name):
+    for base in [ROOT, *ROOT.parents]:
+        d = base / "previous_run_results" / name
+        if (d / "chunk_summaries").is_dir() and (d / cit.AUDIT_FILENAME).is_file():
+            return d
+    return None
+
+
+E1B = _find_run("E1b_cca_f_pilot")
+
+
+@pytest.mark.skipif(E1B is None, reason="E1b pilot results not present")
+def test_e1b_replay_keeps_correct_citations(tmp_path):
+    run = tmp_path / "E1b"
+    shutil.copytree(E1B, run)
+    # Undo E1b's recorded retargets, then replay the audit on the model's notes.
+    for e in json.loads((run / cit.AUDIT_FILENAME).read_text()):
+        if e["rule"] == "citation:retarget":
+            p = run / "chunk_summaries" / f"{e['passage']}.md"
+            lines = p.read_text().split("\n")
+            i = e["notes_line"] - 1
+            lines[i] = lines[i].replace(f"[{e['new_ts']}]", e["original_ts"], 1)
+            p.write_text("\n".join(lines))
+    (run / cit.AUDIT_FILENAME).unlink()
+    entries = lf.reaudit_chunks(run)
+    moves = sorted((e["original_ts"], e["new_ts"]) for e in entries
+                   if e["rule"] == "citation:retarget")
+    assert ("[8:23:35]", "8:30:19") not in moves
+    assert ("[7:37:52]", "7:53:39") not in moves    # `language` is said at 7:37:53
+    assert moves == [("[8:51:18]", "8:48:57")]        # Bash(npx) written at 8:48:55-57
+    p1 = (run / "chunk_summaries" / "07_claude_code_configuration_permissions_sa_p1.md").read_text()
+    assert "n/a]" not in p1 and "[7:53:33][7:55:55][7:53:55]" in p1

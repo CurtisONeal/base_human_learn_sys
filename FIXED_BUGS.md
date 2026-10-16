@@ -13,6 +13,33 @@ Newest first. Format: symptom → cause → fix → how we know.
 
 ---
 
+### The citation audit moved a correct citation on generic words (E1b, WP-F4)
+- **Symptom:** E1b's audit retargeted "`/sandbox` didn't detect them until he
+  started a new session" from [8:23:35] — where "sandbox" is said on the cited
+  line — to [8:30:19], a line about something else that happens to say
+  "starting" and "session". The move made a correct note wrong and logged it
+  as a fix. Same run: `[7:55:55 n/a]` / `[7:55:53 n/a]` rendered as text, and
+  the header said "4 of 14 chapter(s)" while the frontmatter said 13.
+- **Cause:** retargeting compared overall window scores; the strong term was
+  present at both places, so the content-word share alone decided it. The
+  `n/a` markers were model output that `CITE_RE` did not match, so the audit
+  passed them through. The header line still counted the preamble.
+- **Fix:** a retarget now needs a strong or rare (≤2 lines) term at the new
+  line and none at the cited line ±5 s (`ORIGIN_S`; narrower than the 60 s
+  window on purpose, since E1's wrong jq citation has an unrelated "JQ" 8 s
+  away). `normalize_citation_markers` strips `[H:MM:SS n/a]` in the audit and at
+  assembly. One `_chapter_counts` feeds header and frontmatter. The Fact-Checked
+  prompt asks for an impersonal voice (prompt only).
+- **How we know:** replaying the audit on copies of E1 and E1b (E1b's recorded
+  retargets undone first): E1 still makes both reviewer-confirmed moves; E1b
+  makes only `Bash(npx)` [8:51:18]→[8:48:57]. Tests:
+  `test_e1b_correct_sandbox_citation_is_not_retargeted` (real E1b lines in
+  `tests/fixtures/citations/`), plus a control test showing the fixture still
+  reproduces the old move without the guard, `test_e1b_replay_keeps_correct_citations`,
+  `test_leftover_citation_marker_is_normalized`, `test_partial_header_excludes_preamble`.
+  The first-person wording is checked only in the prompt; whether the model
+  obeys it is untested until the next real run.
+
 ### `source_meta.json` had no `duration` for the evaluator; the last cue ran past the end
 - **Symptom:** two contract mismatches found by running the long-form path on
   the CCA-F transcript and grading it with `eval/longform.py`. (1) The evaluator

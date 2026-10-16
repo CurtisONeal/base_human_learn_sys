@@ -1,0 +1,209 @@
+- [8:20:27.439] Sandboxing or a sandbox is a security uh
+- [8:20:34.878] a sandbox provides a tightly controlled
+- [8:20:52.319] can use sandboxes with Claude Code. And
+- [8:21:00.159] going to need certain programs installed
+- [8:21:13.919] and you install them. And then once you
+- [8:21:18.080] sandbox mode. Notice that we can have a
+- [8:21:20.319] few options where it says sandbox bash
+- [8:21:22.080] tools with autoallow, sandbox bash tools
+- [8:21:24.159] with regular permissions or no sandbox.
+- [8:21:29.840] use sandboxing is it's very, very useful
+- [8:21:31.919] when you're running a session with
+- [8:21:40.558] have to remember about sandboxes is that
+- [8:21:42.398] sandboxes only apply to bash tools,
+- [8:22:03.279] outside of the sandbox. It's a tool
+- [8:22:27.840] Hey folks, in this video we're going to
+- [8:22:29.279] take a look at sandboxing or just
+- [8:22:31.279] getting it enabled. So, let's go ahead
+- [8:22:33.200] and get into the interactive shell. We
+- [8:22:35.040] have Claude. I'm going to go and type in
+- [8:22:37.040] sandbox. It's going to depend on what
+- [8:22:40.637] you are running, right? So, I'm on WSL
+- [8:22:43.520] 2. I never installed bubble wrap. I
+- [8:22:45.759] guess it just came installed on this
+- [8:22:47.439] Ubuntu
+- [8:22:48.957] um uh virtual machine. Uh but you can
+- [8:22:51.840] see it really depends on what it is that
+- [8:22:53.759] you want to do. So here it's giving an
+- [8:22:55.279] instruction saying do app install socat.
+- [8:22:59.040] Okay. So I'll make a uh new tab here.
+- [8:23:03.840] We'll go ahead and do that. Um and so
+- [8:23:06.240] I'll just go up and say pseudo app app
+- [8:23:08.240] install. Okay. I guess it just wants
+- [8:23:10.797] that. And we'll just say yes. So it's
+- [8:23:13.360] going to get that installed. It looks
+- [8:23:14.878] like there was one more. So here it says
+- [8:23:16.797] the sec comp filter required to block
+- [8:23:19.919] Unix stuff. And so we'll go ahead and do
+- [8:23:24.159] that separately over here. Okay, we'll
+- [8:23:26.637] hit enter.
+- [8:23:28.957] And it looks like it's been installed.
+- [8:23:30.240] I'm going to make my way back over to
+- [8:23:31.439] here. I'm just going to uh hit escape.
+- [8:23:33.680] We'll go back up to sandbox. And it
+- [8:23:35.919] shows that SOCAT's not installed. So
+- [8:23:37.439] what I'm going to do is I'm just going
+- [8:23:39.759] to get out of this here and I'm going to
+- [8:23:42.477] try this again. and just open a new
+- [8:23:45.119] terminal to try to get a new session.
+- [8:23:47.200] Okay. Because maybe it doesn't know that
+- [8:23:48.637] it's installed. So go ahead and do that.
+- [8:23:51.840] And we will say sandbox.
+- [8:23:55.840] Okay. And so now we get um this mode.
+- [8:23:58.319] It's not even showing that we don't have
+- [8:23:59.439] anything installed. It's now showing us
+- [8:24:01.680] um the steps for us to configure. So
+- [8:24:04.398] let's take a look at the modes we have.
+- [8:24:05.599] We have sandbox bash tool with
+- [8:24:07.119] autoallow. Sandbox tools with regular
+- [8:24:09.119] permissions or no sandbox. And then down
+- [8:24:12.080] below autoallow. commands will try to
+- [8:24:14.159] run in the sandbox automatically and
+- [8:24:16.319] attempts to run outside of the sandbox
+- [8:24:18.477] fallback will fail. So what we'll do is
+- [8:24:20.637] choose the first one and so now we have
+- [8:24:22.477] it turned on. Um how do we know that
+- [8:24:25.119] it's turned on? I wonder if we could do
+- [8:24:26.558] like status line status line show if
+- [8:24:29.599] sandbox mode is turned on.
+- [8:24:33.759] I had a status line earlier when we did
+- [8:24:35.520] the cost but I ended up removing it
+- [8:24:36.957] right away. So if that's why you're
+- [8:24:38.159] wondering why you haven't been seeing
+- [8:24:39.200] it, it's because I keep fiddling with
+- [8:24:59.119] it's trying to grab is sandbox mode. So
+- [8:25:12.718] configured uh and to display a sandbox
+- [8:25:15.119] label to magenta when sandbox mode is
+- [8:25:29.119] Okay. I'm going to go sandbox.
+- [8:25:34.159] obviously didn't set it. And so maybe
+- [8:25:38.159] if we want to know that we have sandbox
+- [8:25:48.797] JSON uh JSON session data. So,
+- [8:25:54.000] So, I'm curious, is there sandbox in
+- [8:26:06.957] sandbox, that's how we're going to have
+- [8:26:11.279] sandbox automatically. Attempt to run
+- [8:26:12.718] outside of the sandbox will uh of the
+- [8:26:16.080] sandbox fall back to regular
+- [8:27:16.398] then for the sandbox, apparently we have
+- [8:27:26.240] sandbox commands, false networks, uh
+- [8:28:03.840] and restart that there. We probably
+- [8:28:14.558] reaching the sandbox. So, permission to
+- [8:28:21.599] This is likely due to the sandbox
+- [8:28:30.558] sandbox catching something and the deny
+- [8:28:49.040] sandbox. Did you want to allow this
+- [8:29:18.317] coming back here. So the sandbox
+- [8:29:22.080] its session directory due to file system
+- [8:29:30.637] which is on the exterior um on here. And
+- [8:29:33.599] so here you can see uh that working. And
+- [8:29:36.797] so yeah, the sandbox is working
+- [8:29:38.240] expected.
+- [8:29:39.759] And so hopefully that was clear. Um I
+- [8:29:42.159] think it was, but I'm just going to
+- [8:29:43.439] revert these for now as I do not need
+- [8:29:45.119] these set. And I'll take these rules out
+- [8:29:47.040] as well so I do not forget. Um, and I'm
+- [8:29:49.599] going to go and turn sandbox off.
+- [8:29:54.080] And we'll say no sandbox currently. Now,
+- [8:29:56.558] should I have used this with dangerously
+- [8:29:58.240] permissions? Probably to show you, but I
+- [8:30:00.477] just also don't want to make a muck of
+- [8:30:02.159] anything. So, I don't even feel
+- [8:30:04.000] comfortable using it. I'd probably
+- [8:30:05.360] launch up a virtual machine and then we
+- [8:30:07.439] would try to do something destructive.
+- [8:30:09.119] Uh, I might do that. We'll see. But for
+- [8:30:12.159] now, I think we've shown how sandbox
+- [8:30:13.759] works. Okay.
+- [8:30:19.439] I'm starting to notice at the beginning
+- [8:30:20.957] of videos I keep saying let us take a
+- [8:30:22.718] look at. So I'm going to try to break
+- [8:30:24.000] that pattern here. Bingo bongo. Uh we
+- [8:30:27.439] are checking out dangerously skip
+- [8:30:29.919] permissions. I don't know. So
+- [8:30:31.439] dangerously skip permissions is a
+- [8:30:33.119] setting which will tell Claude for a
+- [8:30:35.599] session to stop prompting you to ask for
+- [8:30:37.840] permissions. So basically go run at it.
+- [8:30:40.317] And if you want to use it, you type in
+- [8:30:42.240] claude dangerously skip permissions. Um,
+- [8:30:45.599] and you could even oneshot it with the
+- [8:30:47.439] headless task here, which we haven't
+- [8:30:49.119] talked about headless tasks, but that is
+- [8:30:50.558] something that you can do. You can set
+- [8:30:52.477] it in your um, settings.json. Of course,
+- [8:30:55.040] it is not SJ or SJ, it is JSON. It's
+- [8:30:59.040] just a spelling mistake there. Um, and
+- [8:31:01.119] that is a setting that permission
+- [8:31:02.477] default mode. So, bypass permissions. We
+- [8:31:04.477] saw it earlier. I just didn't say
+- [8:31:05.599] anything about it because I was waiting
+- [8:31:07.200] to talk about it. Now, um, let's have a
+- [8:31:09.919] serious talk about this feature because
+- [8:32:24.797] run it in sandbox mode. And this will
+- [8:32:32.957] um sandboxing. Okay.
+- [8:32:39.360] All right. So, I want to use sandbox and
+- [8:33:25.599] necessarily install a library but you
+- [8:33:50.240] enable a sandbox account, right? So we
+- [8:33:56.159] problem is that the sandbox cannot
+- [8:33:59.680] that the sandbox is the obstacle and
+- [8:34:07.439] sandbox becomes something Claude can
+- [8:34:40.080] to remove the sandbox. I'm going to tell
+- [8:34:43.840] show you here. Sandbox is enabled. I
+- [8:35:03.119] sandbox, I can get around that problem
+- [8:35:33.680] around with sandbox uh and dangerously
+- [8:36:03.200] this to be an easy install. In fact, I'm
+- [8:36:09.439] is not going to be an easy install. I
+- [8:37:12.000] just say sandbox test um
+- [8:37:26.398] have a sessions manager. That's how
+- [8:37:45.200] sessions manager uh as the means to
+- [8:38:25.680] installed. It's a single line install.
+- [8:38:44.558] installed. I'm going to make my way over
+- [8:39:05.360] I didn't think about this while I was
+- [8:39:47.599] installed,
+- [8:39:56.159] here it says native installations exists
+- [8:40:54.878] sessions manager but also Amazon
+- [8:43:35.040] cloud. So I want to enable sandbox mode.
+- [8:43:38.718] folder. I'm going to type in sandbox.
+- [8:43:44.317] install the bubble and the other one.
+- [8:44:07.119] installed that easily there. And then we
+- [8:44:30.637] install bubble wrap. We probably need to
+- [8:44:36.477] install bubble wrap.
+- [8:44:44.398] We'll go ahead and we will install
+- [8:44:54.317] try the mpm install assuming mpm is even
+- [8:44:56.477] installed on this machine.
+- [8:44:58.797] It is not installed. So pseudoapp
+- [8:45:01.040] install mpm.
+- [8:45:08.317] install mpm.
+- [8:45:12.317] Okay. Uh, install mpm Ubuntu.
+- [8:45:17.119] It might be pseudo snap install.
+- [8:45:44.159] install MVM. MVM install,
+- [8:45:49.919] source uh for instructions. Why install
+- [8:45:56.878] curl installed?
+- [8:46:11.759] MVM installed node. I don't know what
+- [8:46:50.718] mvm install 20. I'm going to see if it
+- [8:47:09.520] mvm. There we go. mvm install 20.
+- [8:47:13.919] And so that's going to install a version
+- [8:47:17.759] Okay. And that's now installed. I'm
+- [8:47:24.317] that will install all those three
+- [8:47:28.637] all sandbox stuff installed. That looks
+- [8:47:30.240] like it's installed. That red stuff
+- [8:47:42.477] sandbox. So here we have sandbox mode
+- [8:47:45.200] on. So it says sandbox bash tool
+- [8:47:55.520] autoallow. The only thing we didn't do
+- [8:47:57.360] is we didn't deny um
+- [8:49:55.680] sandbox
+- [8:50:03.680] to generate it out. We have mpm install.
+- [8:50:09.439] It didn't it didn't use it. Look, it
+- [8:53:56.957] uh the sandbox right now? I don't know.
+- [8:55:03.360] want to check our sandbox. Is your
+- [8:55:04.558] sandbox on?
+- [8:55:15.200] both sandbox and that deny rule on.
+- [8:55:22.558] outside of sandbox. Do you want to allow
+- [8:55:32.398] you have two layers. The sandbox is
+- [8:55:37.279] sandbox. And then the second part, it
+- [8:55:43.520] to sandbox restrictions. MPM needs to
+- [8:55:48.558] retry with sandbox disabled.
+- [8:55:52.558] See, it actually disabled it. We didn't
+- [8:56:54.637] And I'm going to make sure sandbox mode
+- [8:57:35.040] find a way around the sandbox.
+- [8:57:46.240] the sandbox prevented npm caching
+- [8:57:51.919] let's go take a look at sandbox again.
