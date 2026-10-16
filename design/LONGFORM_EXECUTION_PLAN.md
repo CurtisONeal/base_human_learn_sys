@@ -140,7 +140,7 @@ the hard stop.
 | WP-7 | folded into WP-3 | | |
 | WP-6b | **done** — merged | 1c9ce1f, 0ea99a1 | E3 ASR: 4 parts auto-grouped, parakeet 8 windows, 223 s wall, 17,507 words, gate PASS (coverage 100 %, span 99.96 %, max gap 48 s); seam-duplicate bug found+fixed; resume verified (re-stitch 1.9 s) |
 | E1 | **PASS** (E1b: P1–P7 + P8 20/20) | | see eval log; WP-F4 polish before E2 |
-| E2 | pending | | |
+| E2 | running | | full 13 ch, concurrency 3, claude-cli only → previous_run_results/E2_cca_f_full |
 | E3 | pending | | |
 
 ## Eval log
@@ -176,3 +176,4 @@ _(append each run: date, eval, P1–P8 results, cost, decision)_
 - Regression checks: settings-reload and forkSession now state final observed outcome ✔; restated timestamps 9/10 ✔; tables ✔.
 - Remaining (not P8-failing): (1) audit retarget false positive 8:23:35→8:30:19 on generic words; (2) leftover `[t n/a]` markers; (3) header "of 14" vs chapters_total 13; (4) npx/cowsay outcome still misread — model interpretation of an ambiguous demo; recorded as a known limit, not code-fixable reliably; (5) an exam point drawn from Claude's generated test plan rather than an observation.
 - WP-F4 (audit precision + markers + header + wording) started before E2.
+- WP-F4 merged (62e423a, 569 pass): retarget needs justifying term & cited ±5 s lacks one; E1 keeps 2 correct retargets; E1b false retarget gone; n/a markers normalized; header excludes preamble.
