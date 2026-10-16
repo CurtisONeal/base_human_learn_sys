@@ -238,3 +238,8 @@ _(append each run: date, eval, P1–P8 results, cost, decision)_
 - User supplied the real event: **CLE AI & Data Mega Meetup @ The Natural History Museum, Monday 28 September 2026**, Meetup link + description (agenda, 5 talks: AWS, Nutanix, Arista Networks, Further, OpenAI; sponsors). Written into E3d `source_meta.json` (backup kept) as published 2026-09-28 / Cleveland AI & Data (Meetup). The pipeline's spoken-date inference (2026-09/10) agrees.
 - ~09:40 ET: **E3e** (E3d transcript + real event metadata, fresh notes) and **E2d resume** (3 remaining passages) running.
 - Follow-up idea (not built): `media/longform --event-date --description-file --source-url` flags so users can supply event metadata without editing JSON.
+
+### 2026-10-16 09:35–09:55 ET · E3e + E2d completion
+- **E3e** (E3d transcript + real event metadata, fresh notes): P1 PASS 11/11 · P2 PASS 1029/1029 · P3 PASS · P4 PASS (published 2026-09-28, as_of 2026-09-28, basis published) · P5 PASS 71/71 · P6 · P7 PASS.
+- **E2d resume**: 14 passages from checkpoint, 3 new calls — **resume after a real usage-limit stop verified on real data**. First grading P2 FAIL 2396/2397: model cited [12:42:00] past the video end. **Fix** e871101: out-of-range citation guard in the audit (logged, ranges untouched; replay on real E2d removes exactly that one). Re-audit + reassembly (0 passage calls): P1–P7 PASS (2396/2396).
+- Final independent P8 reviews running for E3e and E2d.
