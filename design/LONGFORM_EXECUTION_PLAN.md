@@ -204,3 +204,8 @@ _(append each run: date, eval, P1–P8 results, cost, decision)_
 - WP-F7 merged (26c9c71): citation commentary normalised (3 on E2); themes consolidated across batches (≤8); ephemeral time-sensitive rows filtered+logged (5 on E2); recorded_estimate inference (E2 ≈ 2026-04 from "April 23rd"); attribution/overstatement prompt rules.
 - WP-F6 merged (149fafe): `outline` rung — one model call → talk/topic sections, validated+snapped+cached; E3 → 13 titled sections following the talks. Merge conflict (one import line) resolved; 619 pass.
 - Next: E3b notes (new transcript + outline), then E2b confirmation rerun with F7.
+
+### 2026-10-15 23:51 – 2026-10-16 00:05 ET · E3b meetup notes + E2b full CCA-F confirmation rerun
+- E3b (re-segmented ASR + outline rung, 10 talk-aligned titled sections): P1 PASS 10/10 (vs pipeline outline — consistency) · P2 PASS 930/930 · P3 PASS · P4 PASS (published unknown, as_of captured) · P5 PASS 63/63 · P6 PASS · P7 PASS. (First grading P1 "FAIL" = managing agent read the wrong JSON key for the expected list; regraded.)
+- E2b (with F7 polish): P1 PASS 13/13 · P2 PASS 2531/2531 · P3 PASS · P4 PASS · P5 PASS 131/131 · P6 PASS · P7 PASS 104/104. recorded_estimate 2026-04 present; 0 leaked repair strings.
+- P8 independent reviews running for both.
