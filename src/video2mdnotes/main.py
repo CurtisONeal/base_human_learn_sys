@@ -914,6 +914,8 @@ def book(
         help="When the subscription runs out: wait | metered | local | stop | ask.",
     ),
     usd_cap: float = typer.Option(None, "--usd-cap", help=USD_CAP_HELP),
+    out: Path = typer.Option(
+        None, "--out", help="Notes directory (default: OUTPUT_DIR/books)"),
 ):
     """Summarize an owned book or paper, preserving chapter/page locators.
 
@@ -921,6 +923,9 @@ def book(
     prints the structure the extractor found and what a run would cost in
     passages, without calling a model at all. Reading that output is how you
     catch a book whose structure came out wrong *before* paying to summarize it.
+
+    Prints `RUN_DIR=<notes dir>` (last line) and writes _last_run.json, like
+    every other command (WP-M3); --extract-only produces no run and reports none.
     """
     from video2mdnotes.core.documents import SUPPORTED, extract as extract_document
 
@@ -941,8 +946,10 @@ def book(
         console.print(f"[red]No {'/'.join(sorted(SUPPORTED))} files in[/red] {target}")
         raise typer.Exit(1)
 
-    out_root = settings.output_dir / "books"
+    out_root = Path(out).expanduser() if out else settings.output_dir / "books"
+    report = RunReport("book", str(target))
     done = failed = skipped = 0
+    stopped = False
 
     for position, source_file in enumerate(files, 1):
         label = f"[{position}/{len(files)}]"
@@ -965,12 +972,19 @@ def book(
             failed += 1
         elif outcome == "stop":
             failed += 1
+            stopped = True
             break
         # "shown" (--extract-only): deliberately uncounted, see the helper's docstring.
 
     console.print(
         f"\n[bold]Books:[/bold] {done} summarized · {skipped} skipped · {failed} failed"
     )
+    if extract_only:
+        return  # no run produced: no RUN_DIR line, _last_run.json untouched
+    if out_root.exists():
+        report.add(out_root, "stopped" if stopped else "failed" if failed
+                   else "ok" if done else "skipped")
+    report.emit()
 
 
 @app.command()

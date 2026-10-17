@@ -83,6 +83,12 @@ DEFAULT_GLOSSARY = Path(__file__).with_name("glossary_default.json")
 DEFAULT_MAX_GAP_S = 120.0
 DEFAULT_COVERAGE = 0.98
 DEFAULT_TOLERANCE_S = 30.0
+# P3 on SHORT media (WP-M1b): transcript lines carry START times only, and a
+# final cue (segments are capped at 20 s, WP-F5) or trailing room tone starts
+# seconds before the end — so "last start >= 98 % of duration" is unpassable
+# for a 15 s clip (needs a cue starting in its last 0.3 s). A tail this short
+# also passes. It only changes the outcome below 25 min (2 % of 25 min = 30 s).
+DEFAULT_TAIL_SLACK_S = 30.0
 DEFAULT_P8_N = 20
 DEFAULT_P8_WINDOW_S = 60.0
 DEFAULT_SEED = 0
@@ -608,6 +614,7 @@ def check_p3(
     inp: RunInputs,
     max_gap: float = DEFAULT_MAX_GAP_S,
     coverage: float = DEFAULT_COVERAGE,
+    tail_slack: float = DEFAULT_TAIL_SLACK_S,
 ) -> dict[str, Any]:
     if not inp.transcript:
         return _result(False, "no transcript lines")
@@ -634,16 +641,22 @@ def check_p3(
                     }
                 )
         prev = max(prev, t)
-    ok = ratio >= coverage and not gaps
+    tail = max(0.0, inp.duration - last)
+    covered = ratio >= coverage or tail <= tail_slack
+    ok = covered and not gaps
+    slack_note = (f" (tail {tail:.0f}s <= {tail_slack:.0f}s slack)"
+                  if ratio < coverage and tail <= tail_slack else "")
     return _result(
         ok,
-        f"last line {fmt_ts(last)} = {ratio:.3%} of {fmt_ts(inp.duration)}; "
+        f"last line {fmt_ts(last)} = {ratio:.3%} of {fmt_ts(inp.duration)}{slack_note}; "
         f"{len(gaps)} gap(s) > {max_gap:.0f}s",
         last_timestamp=fmt_ts(last),
         last_timestamp_s=last,
         duration_s=inp.duration,
         coverage=round(ratio, 5),
         coverage_required=coverage,
+        tail_s=round(tail, 1),
+        tail_slack_s=tail_slack,
         max_gap_s=round(widest, 1),
         gap_limit_s=max_gap,
         gaps_over_limit=gaps,

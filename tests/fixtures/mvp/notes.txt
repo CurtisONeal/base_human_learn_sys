@@ -1,0 +1,9 @@
+Meeting notes - quarterly planning
+
+The team agreed to ship the reporting feature first. Sales asked for CSV
+export, and engineering estimated two sprints for it.
+
+The budget review moves to next week. Finance wants the cloud bill broken
+down by team before approving new spend.
+
+Action items: Dana drafts the export spec; Lee prepares the cost breakdown.

@@ -281,3 +281,25 @@ def test_real_cca_captions_p3_and_transcript_mishearings():
     assert report["inputs"]["expected_chapters"] == 13
     # Auto-captions are full of "cloud code" — the corpus WP-4 must clean.
     assert report["transcript_glossary"]["by_form"]["cloud code"] >= 50
+
+
+def test_p3_short_clip_tail_slack():
+    """WP-M1b: a 15 s clip whose last cue starts at 0:00:10 (start times only;
+    the cue runs to the end) passed the ASR gate but failed P3 at 66 % — the
+    98 % rule needs a cue starting in the last 0.3 s. A tail <= 30 s passes;
+    a long recording still needs 98 %."""
+    def inp(times, duration):
+        return lf.RunInputs(run_dir=Path("."), duration=duration,
+                            transcript=[lf.TranscriptLine(t=t, text="x") for t in times])
+
+    short = lf.check_p3(inp([0, 5, 10], 15.0))
+    assert short["pass"] and short["details"]["tail_s"] == 5.0
+    assert "slack" in short["summary"]
+    # a 1 h recording that stops 40 s early: 98.9 % — passes on coverage, not slack
+    hour = lf.check_p3(inp(range(0, 3561, 60), 3600.0))
+    assert hour["pass"] and "slack" not in hour["summary"]
+    # a 25 min talk missing its last 2 minutes still fails
+    cut = lf.check_p3(inp(range(0, 1381, 60), 1500.0))
+    assert not cut["pass"] and cut["details"]["tail_s"] == 120.0
+    # an internal gap still fails a short clip
+    assert not lf.check_p3(inp([0, 130, 140], 150.0), max_gap=120)["pass"]
