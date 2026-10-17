@@ -255,3 +255,13 @@ Open items (recorded, not blocking):
 - Meetup: giveaway prize ("Claude Pro" running joke) not identified; consistency resolutions rendered as pointers only; MC/opener roles; no short top summary.
 - Feature: CLI flags for user-supplied event metadata (`--event-date`, `--description-file`, `--source-url`) instead of editing source_meta.json.
 - longform_state.json per-passage `citation_audit` not updated by reaudit (bookkeeping).
+
+### 2026-10-16/17 · Real-source tests chosen by the user (all subscription-only, `--usd-cap 0`)
+| Run | Source | Path exercised | Result |
+|---|---|---|---|
+| T1 | Azure Master Class v3 Pt 2 Identity (John Savill, 2:28:39, YouTube, auto-captions only) | process → native-audio download → windowed parakeet → platform chapters (22) → long-form | **P1–P7 PASS** (22/22, 2017/2017, 112/112). Entra/Intra/Entry mishearings only in the uncertainty table. |
+| T2 | Azure Master Class v3 Pt 1 (1:01:20, 10,506 words) | process → windowed ASR → **short single-call path** | **FAIL P1/P4/P5/P7** — 1/22 chapters, no dates/claims/corrections: short path lacks every long-form feature. |
+| T3 | Karpathy "Let's build GPT" (1:56:20, 30 platform chapters) | process → windowed ASR → long-form | **P1–P7 PASS** (30/30, 1692/1692). 30 passage calls (tiny chapters not merged). |
+| T4 | Timkoo `.aac` 70 s clip (copy in `~/Movies/audio_test_copies/`) | media → windowed ASR (truncated AAC ending) → short path | Gate PASS; notes correctly say "not enough to summarize". |
+| T5 | ClePy FastAPI talk `.aac` (1:04:45, 11,166 words) | media → windowed ASR → **short path** | Gate PASS (99.96 %); notes good but **0 citations**, no dates/claims/corrections. |
+- Finding: the short path is the weak link for anything under ~12k words. Proposed fix (WP-M2): route every transcript through the long-form assembly (one passage when short; skip course map/consistency when there is a single section), so all sources get frontmatter, chapters, citations, dated claims and corrections. Also: merge tiny adjacent chapters into one passage (T3 efficiency).
