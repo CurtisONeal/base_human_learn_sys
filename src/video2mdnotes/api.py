@@ -61,6 +61,9 @@ def process_pipeline(url: str, usd_cap: float | None = None):
 def _process_pipeline(url: str):
     """Body of process_pipeline (lock and run scope already held)."""
     logger.info(f"API: Starting background processing for URL: {url}")
+    from video2mdnotes.core.runreport import RunReport
+    report = RunReport("api /process", url)
+    project_dir = None
     try:
         sources = probe_source(url)
         logger.success(f"API: Found {len(sources)} videos.")
@@ -75,11 +78,9 @@ def _process_pipeline(url: str):
                     title=source.title, subtitles=source.subtitles
                 )
 
-            from video2mdnotes.core.downloader import sanitize_filename
+            from video2mdnotes.core.downloader import run_dir_name, sanitize_filename
             safe_title = sanitize_filename(source.title)
-            date_str = dt.date.today().strftime('%Y%m%d')
-            project_dir_name = f"{date_str}_{safe_title}"
-            project_dir = settings.output_dir / project_dir_name
+            project_dir = settings.output_dir / run_dir_name(source.title)
 
             audio_path = None
             if transcript_result is None:
@@ -118,16 +119,21 @@ def _process_pipeline(url: str):
                 wav_dir.mkdir(exist_ok=True)
                 shutil.move(str(audio_path), str(wav_dir / audio_path.name))
 
-            # The same length gate as the CLI: > DEFAULT_MAX_WORDS goes to the
-            # checkpointed long-form path, never one single-call summary.
+            # The same path as the CLI (WP-M2): every transcript goes through
+            # the checkpointed long-form pipeline, however short.
             from video2mdnotes.main import _summarize_transcript
             summary_result = _summarize_transcript(transcript_result, project_dir)
             (summaries_dir / f"{safe_title}.summary.md").write_text(summary_result.summary_text, encoding="utf-8")
+            report.add(project_dir, "ok", str(source.url))
 
             logger.success(f"API: Successfully processed and archived {source.title}")
 
     except Exception as e:
         logger.error(f"API: Background processing failed for {url}. Reason: {e}")
+        if project_dir is not None:
+            report.add(project_dir, "failed")
+    # WP-M3: the API has no stdout reader, but _last_run.json says where it went.
+    report.emit()
 
 @app.post("/process", status_code=202)
 def process_video_url(request: ProcessRequest, background_tasks: BackgroundTasks):

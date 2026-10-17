@@ -387,8 +387,9 @@ docker compose up api
 *   **Usage**: Use the `POST /process` endpoint to submit URLs:
     `{"url": "https://...", "usd_cap": 0}` (`usd_cap` optional — per-request
     metered cap, see "Cumulative vs per-run caps"). Requests run one at a time
-    (each is its own ledger run), and go through the same length gate as the
-    CLI: transcripts over 12k words take the long-form path.
+    (each is its own ledger run), and take the same long-form path as the
+    CLI for every transcript. The run dir is recorded in
+    `previous_run_results/_last_run.json`.
 *   **Shutdown**: Press `Ctrl+C` in the terminal to gracefully stop the server.
 
 ### 3. Interactive Mode (Shell)
@@ -509,7 +510,7 @@ even over a pin.
     media part1.MOV part2.MOV part3.MOV --group --transcribe-only --out previous_run_results/meetup
 
 `--transcribe-only` stops after the transcript, so no LLM calls are made. Without it, the
-transcript goes to the usual length gate, and the long-form path applies the glossary correction.
+transcript goes to the long-form path (every length), which applies the glossary correction.
 
 ### Long runs: resuming and running out of capacity
 
@@ -662,10 +663,14 @@ podcast) and Aikido content.
 
 ### Long recordings (long-form path)
 
-A transcript over `DEFAULT_MAX_WORDS` (12,000 words) no longer goes through the
-single-call prompt above — a 12-hour course is ~120k words. `process` and
-`media` route it to `core/longform.py` automatically (the short path is
-unchanged), and `longform` runs it on an **existing** run dir with no download:
+Every media/video transcript — `process` (with or without captions), `media`,
+the API's `/process` — goes through `core/longform.py`, however short (WP-M2).
+The old single-call prompt above gave short sources none of the long-form
+features (Azure Master Class Pt 1: 1 heading for 22 chapters, no dates, no
+time-sensitive table; the ClePy talk: 0 citations). Text documents (`book`,
+`process` on a local `.md`/`.txt`/`.html`/`.pdf`/`.epub`, an article URL) keep
+their own `summarize_document` path. `longform` runs the pipeline on an
+**existing** run dir with no download:
 
 ```bash
 # What would run: chapters, parts, passages, estimated calls. No model calls.
@@ -684,7 +689,19 @@ What it does, in order: reads `source_meta.json` (or derives it from
 copy plus `corrections.json` (the raw transcript is never edited), cuts the
 corrected transcript with the structure ladder (chapters → description list →
 outline → cues → windows; oversize chapters split into parts), then makes **one model
-call per passage**. Each passage prompt carries the dated source header, the
+call per pack**. Packing: when the whole source fits one passage (≤ 12,000
+words) it is ONE call; otherwise consecutive whole chapters share a call until
+the pack reaches 3,000 words or 8 minutes (never over budget, never splitting a
+chapter; a split chapter keeps one call per part). A multi-chapter call lists
+each chapter with a `## Chapter <n>` marker and marks its start in the
+transcript; the reply is split back into per-chapter notes, each audited
+against its own chapter's lines, and a chapter the reply skipped is re-run on
+its own. Every chapter still gets its own `## <title> [range]` section.
+`--plan-only` shows the packing (a `call` column and one line per pack);
+`--no-pack` restores one call per passage. With a single call, the Course Map
+is rendered deterministically from the skeleton (no course-map call) and the
+consistency call is skipped. `structure.json` records the sections and their
+rung (the evaluator's P1 fallback for a source with no chapters). Each passage prompt carries the dated source header, the
 course skeleton, every caption line with its `[H:MM:SS]`, a mishearing hint,
 the uncertainty and time-sensitive instructions; part 2+ of a split chapter
 also gets the previous part's **ledger** (concepts, corrections, open threads,
@@ -825,7 +842,19 @@ in the docstring of `src/video2mdnotes/eval/longform.py`.
 ```
 
 It writes `eval_report.json`, `eval_report.md` and `p8_sample.json` to
-`<run_dir>/eval/` (or `--out`), and exits 0 only if P1–P7 all pass. P8 is
+`<run_dir>/eval/` (or `--out`), and exits 0 only if P1–P7 all pass. It exits 2
+with an `ERROR:` line when the run dir does not exist or has no transcripts or
+notes — it never "evaluates nothing". With no `--expected-chapters` and no
+chapters in `source_meta.json`, P1 is graded against the pipeline's own
+`structure.json` sections and says so (self-reported, with the rung).
+
+**Finding the run dir.** Never derive it from the title (the pipeline drops
+"'" — "Let's" → `lets`, so `*let_s_*` matches nothing). `process`, `media` and
+`longform` print one `RUN_DIR=<absolute path>` line per run as the last lines
+of stdout and write `previous_run_results/_last_run.json` (`run_dir`,
+`command`, `source`, `started`, `finished`, `status`, `runs`). `process --out
+DIR` pins the run dir for one video (a playlist gets `DIR/<YYYYMMDD>_<title>`
+per video), like `media --out` and `longform --out`. P8 is
 recorded as "pending reviewer": `p8_sample.json` holds 20 seeded, cited claim
 bullets with ±60 s of transcript each, for an independent reviewer agent to
 judge. `--criteria P3` runs a subset (the report is marked partial);

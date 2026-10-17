@@ -13,6 +13,42 @@ Newest first. Format: symptom → cause → fix → how we know.
 
 ---
 
+### An evaluation that ran on nothing (T3 harness, WP-M3)
+- **Symptom:** the managing agent evaluated the Karpathy run with a glob
+  `*let_s_build_gpt*`; the folder is `…_lets_build_gpt_…`, the glob matched
+  nothing, and the evaluation "ran" without a run dir to read.
+- **Cause:** the caller re-derived the folder name from the title instead of
+  being told it, and `sanitize_filename` drops the apostrophe ("Let's" →
+  `lets`) rather than turning it into `_`. Nothing in the pipeline reported
+  where a run went, and the evaluator did not check that its input existed.
+- **Fix:** `process`/`media`/`longform` print `RUN_DIR=<absolute path>` per run
+  as the last stdout lines and write `previous_run_results/_last_run.json`
+  (`core/runreport.py`); `process --out` pins the run dir; the evaluator exits 2
+  with an `ERROR:` line when the run dir is missing or has no transcripts or
+  notes; dated folder names come only from `downloader.run_dir_name`.
+- **How we know:** `tests/test_short_path.py` (the title → folder case, a
+  source scan for other date-prefixed names, RUN_DIR as the last line for
+  `process` single/playlist and `longform`, `_last_run.json`, evaluator exit 2).
+
+### Short sources got none of the long-form features (T2, T5, WP-M2)
+- **Symptom:** transcripts ≤ 12k words went through the old single-call
+  prompt. Azure Master Class Pt 1 (22 platform chapters) came out with one
+  heading, no `published`/`as_of`, no time-sensitive table, no corrections —
+  FAIL P1/P4/P5/P7; the ClePy FastAPI talk had 0 citations.
+- **Cause:** a length gate in `main._summarize_transcript` kept short
+  transcripts on `generate_summary`; every long-form feature lived only past it.
+- **Fix:** no gate — every media transcript goes through `run_longform`. A
+  source that fits one passage is ONE call (multi-chapter prompt with a
+  `## Chapter <n>` marker per chapter, split back into per-chapter sections);
+  the Course Map is then deterministic and the consistency call skipped.
+  Longer sources pack short adjacent chapters (≥ 3k words or ≥ 8 min per
+  call): Karpathy's 30 chapters are 10 calls instead of 30.
+- **How we know:** `tests/test_short_path.py` asserts on the rendered pack
+  prompt and the assembled notes (per-chapter headings with in-range
+  citations, frontmatter dates, claims table, corrections.json, P1–P7 pass)
+  and on a no-chapter source passing P1 via `structure.json`; real reruns
+  in `previous_run_results/T2b_azure_p1` and `T5b_aac_clepy` (`eval/`).
+
 ### Correct citations marked "unverified" because captions misheard the term (E2b, WP-F8)
 - **Symptom:** E2b's notes carried two `_(unverified citation)_` markers on
   citations the P8 reviewer found correct: `.gitignore` at 6:59:52 (captions:

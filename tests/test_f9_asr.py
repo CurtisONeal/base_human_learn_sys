@@ -142,7 +142,7 @@ def test_process_without_captions_uses_windowed_asr(tmp_path, monkeypatch, windo
     with patch("video2mdnotes.main.probe_source", return_value=[src]), \
          patch("video2mdnotes.main.transcript_from_captions", return_value=None), \
          patch("video2mdnotes.main.fetch_audio", side_effect=fake_fetch), \
-         patch("video2mdnotes.main.generate_summary",
+         patch("video2mdnotes.core.longform.run_longform",
                side_effect=RuntimeError("no model in tests")):
         CliRunner().invoke(app, ["process", "https://example/v"])
     assert seen["convert"] is False               # native audio, no whole-file wav

@@ -8,6 +8,8 @@ real ADPCM `.wav` is the thing that actually comes off a voice recorder.
 Building them takes a second and they are torn down with tmp_path.
 """
 
+import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -240,16 +242,31 @@ def test_media_command_produces_the_same_artifacts_as_a_video(tmp_path, monkeypa
     monkeypatch.setattr(settings, "output_dir", tmp_path / "out")
 
     _fake_asr(monkeypatch)
-    monkeypatch.setattr("video2mdnotes.main.generate_summary",
-                        lambda t: SummaryResult(
-                            source_file=tmp_path / "x.wav", model_name="test",
-                            summary_text="## Summary\n\nnotes",
-                            generated_at=dt.datetime.now()))
+    calls = []
+
+    def fake_complete(system, user):
+        calls.append(user)
+        ts = re.search(r"^\[(\d+:\d{2}:\d{2})\]", user, re.M).group(1)
+        return f"### Summary\n- The speaker says hello there [{ts}]\n", "test/model"
+
+    # WP-M2: even a one-line clip goes through the long-form pipeline (one
+    # passage call), not the old single-call prompt.
+    monkeypatch.setattr("video2mdnotes.core.summarizer.complete_with_failover", fake_complete)
 
     result = CliRunner().invoke(app, ["media", str(source)])
     assert result.exit_code == 0, result.output
-    assert (tmp_path / "out" / "meeting" / "transcripts" / "meeting.md").exists()
-    assert (tmp_path / "out" / "meeting" / "summaries" / "meeting.summary.md").exists()
+    run = tmp_path / "out" / "meeting"
+    assert (run / "transcripts" / "meeting.md").exists()
+    notes = (run / "summaries" / "meeting.summary.md").read_text()
+    assert len(calls) == 1 and "THIS PASSAGE:" in calls[0]
+    assert notes.startswith("---\n") and "\nas_of: " in notes and "notes_kind: \"longform\"" in notes
+    assert "## Time-Sensitive Claims" in notes and "## Course Map" in notes
+    assert (run / "corrections.json").exists() and (run / "structure.json").exists()
+    # WP-M3: the run dir is reported, last on stdout, and in _last_run.json
+    assert result.output.rstrip().splitlines()[-1] == f"RUN_DIR={run.resolve()}"
+    last = json.loads(settings.last_run_file.read_text())
+    assert last["run_dir"] == str(run.resolve()) and last["command"] == "media"
+    assert last["status"] == "ok"
 
 
 @ffmpeg_present
@@ -264,8 +281,8 @@ def test_transcript_survives_a_summarizer_failure(tmp_path, monkeypatch):
     source = _encode(tmp_path / "talk.mp3", codec="libmp3lame", rate=16000, channels=1)
     monkeypatch.setattr(settings, "output_dir", tmp_path / "out")
     _fake_asr(monkeypatch, "real words")
-    monkeypatch.setattr("video2mdnotes.main.generate_summary",
-                        lambda t: (_ for _ in ()).throw(RuntimeError("provider down")))
+    monkeypatch.setattr("video2mdnotes.core.summarizer.complete_with_failover",
+                        lambda s, u: (_ for _ in ()).throw(RuntimeError("provider down")))
 
     CliRunner().invoke(app, ["media", str(source)])
     written = list((tmp_path / "out").glob("*/transcripts/*.md"))
@@ -288,7 +305,7 @@ def test_probe_mode_transcribes_nothing(tmp_path, monkeypatch):
 
     from video2mdnotes.core import longasr
     monkeypatch.setattr(longasr, "transcribe_long", _boom)
-    monkeypatch.setattr("video2mdnotes.main.generate_summary", _boom)
+    monkeypatch.setattr("video2mdnotes.core.longform.run_longform", _boom)
     result = CliRunner().invoke(app, ["media", str(source), "--probe"])
     assert result.exit_code == 0
     assert not list((tmp_path / "out").rglob("*.md"))

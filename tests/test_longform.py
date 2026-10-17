@@ -50,6 +50,24 @@ def passage_lines(user: str):
     return [m.groups() for m in map(_LINE.match, body.splitlines()) if m]
 
 
+_PACK_MARK = re.compile(r'^--- (?:CHAPTER (\d+) "[^"]*"|PREAMBLE) \[')
+
+
+def pack_blocks(user: str):
+    """[(marker line, [(ts, text)])] of a multi-chapter pack prompt, else []."""
+    body = user.split("PASSAGE TRANSCRIPT", 1)[1].split("END OF PASSAGE", 1)[0]
+    blocks = []
+    for line in body.splitlines():
+        m = _PACK_MARK.match(line)
+        if m:
+            blocks.append([f"## Chapter {m.group(1)}" if m.group(1) else "## Preamble", []])
+            continue
+        lm = _LINE.match(line)
+        if lm and blocks:
+            blocks[-1][1].append(lm.groups())
+    return [(mk, ls) for mk, ls in blocks if ls]
+
+
 class MockLLM:
     """Deterministic notes citing real timestamps from the passage it was given."""
 
@@ -80,10 +98,33 @@ class MockLLM:
         return "\n".join(rows) + "\n\n### Cross-chapter themes\n- Agents recur (ch. 1, 2)\n"
 
     def _passage(self, user: str) -> str:
-        lines = passage_lines(user)
-        first, mid, last = lines[0], lines[len(lines) // 2], lines[-1]
         n = len(self.calls)
         where = re.search(r"THIS PASSAGE: (.*?)\.\n", user).group(1)
+        packed = pack_blocks(user)
+        if packed:
+            # A multi-chapter pack (WP-M2): one `## Chapter <n>` block per
+            # chapter, each citing only its own lines; ONE ledger at the end.
+            out = []
+            for marker, lines in packed:
+                out.append(marker)
+                out.append(self._sections(n, f"{where} / {marker}", lines))
+            return "\n".join(out) + self._ledger(n, packed[-1][1][-1])
+        lines = passage_lines(user)
+        return self._sections(n, where, lines) + self._ledger(n, lines[-1])
+
+    @staticmethod
+    def _ledger(n, last) -> str:
+        return f"""
+```ledger
+{{"concepts": [{{"term": "term{n}", "definition": "defined in passage {n}"}}],
+  "terms_and_corrections": [], "open_threads": ["thread from passage {n}"],
+  "last_point": "passage {n} ended at {last[0]}"}}
+```
+"""
+
+    @staticmethod
+    def _sections(n, where, lines) -> str:
+        first, mid, last = lines[0], lines[len(lines) // 2], lines[-1]
         return f"""### Summary
 - Passage {n} ({where}) opens with: {first[1]} [{first[0]}]
 - Middle point: {mid[1]} [{mid[0]}]
@@ -116,12 +157,6 @@ claude --version
 
 ### Fact-Checked Notes
 - The speaker configures cloud code hooks; correct as of the published date [{first[0]}]
-
-```ledger
-{{"concepts": [{{"term": "term{n}", "definition": "defined in passage {n}"}}],
-  "terms_and_corrections": [], "open_threads": ["thread from passage {n}"],
-  "last_point": "passage {n} ended at {last[0]}"}}
-```
 """
 
 
@@ -355,48 +390,43 @@ def test_course_map_falls_back_when_reply_collapses(small_run, tmp_path):
 # --- length gate ---------------------------------------------------------------------------
 
 
-def test_length_gate_short_transcript_uses_generate_summary(monkeypatch, tmp_path):
+def test_no_length_gate_short_transcript_routes_to_longform(monkeypatch, tmp_path):
+    """WP-M2: a SHORT transcript goes through the long-form path too — the old
+    single-call generate_summary is no longer reachable from main."""
     from video2mdnotes import main
     from video2mdnotes.core.transcriber import Segment, TranscriptResult
 
+    assert not hasattr(main, "generate_summary")
     seen = {}
 
-    def fake_generate_summary(transcript):
-        seen["called"] = transcript
-        return "single-call result"
+    def fake_run_longform(run_dir, **k):
+        seen["run_dir"] = run_dir
+        return lf.LongformResult(summary_path=run_dir / "s.md", notes="LONGFORM NOTES",
+                                 models=["mock"])
 
-    def no_longform(*a, **k):
-        raise AssertionError("long-form path must not run for a short transcript")
-
-    monkeypatch.setattr(main, "generate_summary", fake_generate_summary)
-    monkeypatch.setattr(lf, "run_longform", no_longform)
+    monkeypatch.setattr(lf, "run_longform", fake_run_longform)
     tr = TranscriptResult(
         source_file=tmp_path / "a.wav", language="en",
         segments=[Segment(start=0, end=1, text="short words only")],
         full_text="short words only", markdown_content="x", model_name="m",
         generated_at=dt.datetime.now(),
     )
-    assert main._summarize_transcript(tr, tmp_path) == "single-call result"
-    assert seen["called"] is tr
-    assert not lf.needs_longform(tr.segments)
-    assert lf.needs_longform([Segment(start=0, end=1, text="w " * 12_001)])
-
-
-def test_length_gate_long_transcript_routes_to_longform(monkeypatch, tmp_path):
-    from video2mdnotes import main
-    from video2mdnotes.core.transcriber import Segment, TranscriptResult
-
-    monkeypatch.setattr(main, "generate_summary",
-                        lambda t: (_ for _ in ()).throw(AssertionError("single call used")))
-    monkeypatch.setattr(lf, "run_longform", lambda run_dir, **k: lf.LongformResult(
-        summary_path=run_dir / "s.md", notes="LONGFORM NOTES", models=["mock"]))
-    tr = TranscriptResult(
-        source_file=tmp_path / "a.wav", language="en",
-        segments=[Segment(start=0, end=1, text="w " * 12_001)],
-        full_text="", markdown_content="x", model_name="m", generated_at=dt.datetime.now(),
-    )
     result = main._summarize_transcript(tr, tmp_path)
+    assert seen["run_dir"] == tmp_path
     assert result.summary_text == "LONGFORM NOTES" and result.model_name == "mock"
+
+
+def test_empty_transcript_makes_no_call(monkeypatch, tmp_path):
+    from video2mdnotes import main
+    from video2mdnotes.core.transcriber import TranscriptResult
+
+    monkeypatch.setattr(lf, "run_longform",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("called")))
+    tr = TranscriptResult(source_file=tmp_path / "a.wav", language="en", segments=[],
+                          full_text="", markdown_content="x", model_name="m",
+                          generated_at=dt.datetime.now())
+    result = main._summarize_transcript(tr, tmp_path)
+    assert result.summary_text == summarizer.EMPTY_TRANSCRIPT_PLACEHOLDER
 
 
 def test_longform_is_a_registered_command():
@@ -435,7 +465,9 @@ def test_cca_plan_only_17_passages_zero_calls(cca_copy, monkeypatch):
     out = flat(result.output)
     assert "Passages: 17 in all, 3 chapter(s) split" in out
     assert "Chapters: 14 (13 + preamble)" in out
-    assert "Estimated model calls: 17 passage + 4 course map = 21" in out
+    assert "Estimated model calls: 16 passage + 4 course map = 20" in out
+    # WP-M2: the 47 s preamble rides with chapter 1 in one call
+    assert "pack_00-01: the Preamble and chapter 1 [0:00:00–0:10:17]" in out
     assert sorted(p.name for p in cca_copy.rglob("*")) == before   # nothing written
 
 
@@ -471,7 +503,7 @@ def test_cca_full_13_chapters_end_to_end(cca_copy, tmp_path):
                              progress=lambda m: None)
     kinds = [k for k, _ in mock.calls]
     # 3 course-map batches + ONE themes consolidation call (WP-F7)
-    assert kinds.count("passage") == 17 and kinds.count("map") == 4
+    assert kinds.count("passage") == 16 and kinds.count("map") == 4   # preamble + ch1 packed
     themes_user = [u for k, u in mock.calls if k == "map"][-1]
     assert themes_user.startswith("Chapters (for reference only):")
     assert "### Summary" not in themes_user and "Candidate themes from the batches" in themes_user

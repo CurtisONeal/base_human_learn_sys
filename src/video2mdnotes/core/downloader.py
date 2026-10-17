@@ -53,11 +53,24 @@ def sanitize_filename(name: str) -> str:
     - Replaces whitespace and dashes with underscores.
     - Converts to lowercase.
     - Removes special characters.
+
+    This is the ONLY place a title becomes a file or folder name (WP-M3):
+    "Let's build GPT: from scratch, in code, spelled out." becomes
+    "lets_build_gpt_from_scratch_in_code_spelled_out" — the apostrophe is
+    dropped, not turned into "_", so a glob like `*let_s_build*` misses it.
+    Never re-derive a run dir from a title; read the `RUN_DIR=` line or
+    `_last_run.json` a command writes (core/runreport.py).
     """
     name = re.sub(r'[\s-]+', '_', name)
     name = name.lower()
     name = re.sub(r'[^a-z0-9_]', '', name)
     return name
+
+
+def run_dir_name(title: str, date: "dt.date | None" = None) -> str:
+    """`<YYYYMMDD>_<sanitized title>`: the folder `process` and the API make
+    for one video (date = today unless given)."""
+    return f"{(date or dt.date.today()).strftime('%Y%m%d')}_{sanitize_filename(title)}"
 
 def probe_source(url: str, allow_embed_scrape: bool = True) -> List[SourceInfo]:
     """
@@ -164,11 +177,9 @@ def fetch_audio(source: SourceInfo, convert: bool = True) -> Path:
     """
     settings.temp_dir.mkdir(exist_ok=True)
 
-    sanitized_title = sanitize_filename(source.title)
     logger.info(f"Downloading audio: {source.title}")
 
-    date_str = dt.date.today().strftime('%Y%m%d')
-    output_path = settings.temp_dir / f"{date_str}_{sanitized_title}.wav"
+    output_path = settings.temp_dir / f"{run_dir_name(source.title)}.wav"
 
     ydl_opts_download = {
         'format': 'bestaudio/best',

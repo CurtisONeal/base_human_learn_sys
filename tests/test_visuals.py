@@ -238,7 +238,7 @@ def test_transcript_survives_a_summarizer_failure(tmp_path, monkeypatch):
          patch("video2mdnotes.main.fetch_audio", return_value=tmp_path / "a.wav"), \
          patch("video2mdnotes.core.longasr.transcribe_media",
                return_value=type("L", (), {"result": tr})()), \
-         patch("video2mdnotes.main.generate_summary",
+         patch("video2mdnotes.core.longform.run_longform",
                side_effect=RuntimeError("provider exploded")):
         CliRunner().invoke(app, ["process", "https://example/v"])
 

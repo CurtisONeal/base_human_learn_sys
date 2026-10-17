@@ -339,6 +339,11 @@ def generate_summary(transcript: TranscriptResult) -> SummaryResult:
     """
     Generates a summary for a given transcript using an LLM.
 
+    NOT used by any pipeline path since WP-M2: every media transcript goes
+    through core/longform.py (documents use `summarize_document`). Kept as
+    the reference single-call behaviour its tests pin (failover, the empty-
+    transcript short-circuit); do not route new callers here.
+
     Backends are tried in settings.llm_models order. That list is a FAILOVER
     chain, not a quality ladder — entry 1 does essentially all the work and
     later entries fire only when an earlier one errors. The full raw transcript

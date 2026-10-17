@@ -6,7 +6,8 @@ Usage:
         [--out DIR] [--max-gap 120] [--criteria P3,P6] [--scan-transcript]
 
 Writes eval_report.json, eval_report.md and p8_sample.json to --out
-(default <run_dir>/eval). Exit 0 if P1-P7 all pass, 1 otherwise. No model is
+(default <run_dir>/eval). Exit 0 if P1-P7 all pass, 1 otherwise, 2 (with an
+ERROR line) when the run dir is missing or has no transcripts or notes. No model is
 called; P8 is left "pending reviewer". The run-directory contract is in the
 docstring of video2mdnotes.eval.longform.
 """

@@ -338,6 +338,8 @@ class Settings(BaseSettings):
 
     # File Paths (defaults are relative to project root)
     output_dir: Path = BASE_DIR / "previous_run_results"
+    # Where every command records its last run (WP-M3); None = output_dir/_last_run.json.
+    last_run_file: Path | None = None
     temp_dir: Path = BASE_DIR / "temp_files"
     prompt_file: Path = BASE_DIR / "summarize_prompt.txt"
 

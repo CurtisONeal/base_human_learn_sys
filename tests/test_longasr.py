@@ -412,7 +412,7 @@ def test_media_group_transcribe_only(two_files, tmp_path, monkeypatch):
         raise AssertionError("must not be called")
 
     assert not hasattr(media_mod, "to_wav")                          # never whole-file
-    monkeypatch.setattr("video2mdnotes.main.generate_summary", boom)  # no LLM
+    monkeypatch.setattr("video2mdnotes.core.longform.run_longform", boom)  # no LLM
     out = tmp_path / "E3"
     result = CliRunner().invoke(app, ["media", *map(str, two_files), "--group",
                                       "--transcribe-only", "--out", str(out)])

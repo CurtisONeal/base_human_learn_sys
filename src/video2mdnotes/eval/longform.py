@@ -61,7 +61,9 @@ the harness reads nothing else.
 
 Expected chapters (P1) come from an explicit ``expected_chapters`` file when one
 is given — it is the evaluator's ground truth, so the pipeline is not graded
-against its own claim — else from ``source_meta.json`` ``chapters``. The file has
+against its own claim — else from ``source_meta.json`` ``chapters``, else (a
+source that declares no chapters) from the pipeline's own ``structure.json``
+sections — reported as self-reported, with the structure rung. The file has
 one chapter per line, optionally prefixed by ``- `` and/or a timestamp
 (``- 00:10:17 SDK Environment Setup``); blank lines and ``#`` comments ignored.
 """
@@ -276,7 +278,57 @@ def load_run(
             )
     elif meta_chapters:
         inp.chapters, inp.chapters_source = meta_chapters, meta["_file"]
+    else:
+        own = structure_chapters(run_dir)
+        if own is not None:
+            inp.chapters, rung = own
+            inp.chapters_source = (
+                f"{STRUCTURE_FILE} (the pipeline's own sections, rung: {rung} — "
+                "self-reported, not ground truth: the source declares no chapters)")
+            inp.warnings.append(
+                f"P1 graded against the pipeline's own {len(inp.chapters)} section(s) "
+                f"from {STRUCTURE_FILE} (rung: {rung}); give --expected-chapters for "
+                "an independent check")
     return inp
+
+
+STRUCTURE_FILE = "structure.json"
+
+
+def structure_chapters(run_dir: Path) -> tuple[list[str], str] | None:
+    """(section titles, rung) from the pipeline's structure.json, the preamble
+    excluded (it is not a chapter), or None when there is no such file.
+    Display titles are used: they are what the headings show."""
+    path = Path(run_dir) / STRUCTURE_FILE
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    titles = [str(sec.get("display_title") or sec.get("title") or "")
+              for sec in data.get("sections") or []
+              if isinstance(sec, dict) and not sec.get("preamble")]
+    titles = [t for t in titles if t.strip()]
+    return (titles, str(data.get("rung") or "unknown")) if titles else None
+
+
+class RunDirError(ValueError):
+    """The run dir cannot be evaluated: missing, or nothing in it to grade."""
+
+
+def check_run_dir(run_dir: Path, transcript: Path | None = None) -> None:
+    """Fail loudly (WP-M3) instead of evaluating nothing: a harness that
+    globbed `*let_s_build_gpt*` for a folder named `lets_build_gpt` got a
+    clean-looking report over no files at all."""
+    run_dir = Path(run_dir)
+    if not run_dir.is_dir():
+        raise RunDirError(f"run dir does not exist: {run_dir}")
+    if transcript is None and not any((run_dir / "transcripts").glob("*.md")):
+        raise RunDirError(f"no transcripts/*.md in {run_dir} — not a run dir "
+                          "(read the RUN_DIR= line or _last_run.json the command wrote)")
+    if not any((run_dir / "summaries").glob("*.summary.md")):
+        raise RunDirError(f"no summaries/*.summary.md in {run_dir} — nothing to evaluate")
 
 
 def _norm(text: str) -> str:
@@ -924,6 +976,12 @@ def main(argv: list[str] | None = None) -> int:
     unknown = set(criteria) - set(CRITERIA)
     if unknown:
         ap.error(f"unknown criteria: {sorted(unknown)}")
+    try:
+        check_run_dir(args.run_dir, args.transcript)
+    except RunDirError as exc:
+        import sys
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
     report, sample = evaluate(
         args.run_dir,
         expected_chapters=args.expected_chapters,

@@ -18,8 +18,8 @@ from video2mdnotes.core.summarizer import (
     EMPTY_TRANSCRIPT_PLACEHOLDER,
     BudgetExhausted,
     SubscriptionExhausted,
-    generate_summary,
 )
+from video2mdnotes.core.runreport import RunReport
 from video2mdnotes.core.captions import transcript_from_captions
 from video2mdnotes.core import frames as frames_mod
 from video2mdnotes.core import visuals
@@ -152,7 +152,10 @@ def _add_visuals(project_dir: Path, source, summary_path: Path) -> None:
         shutil.rmtree(project_dir / "_video", ignore_errors=True)
 
 
-def _project_root(source) -> Path:
+_DOC_STATUS = {"done": "ok", "skipped": "skipped", "failed": "failed", "stop": "stopped"}
+
+
+def _project_root(source, base: Path | None = None) -> Path:
     """Output root for one source, grouped by playlist when asked.
 
     Grouping is opt-in because turning it on moves where notes land, and a
@@ -161,7 +164,7 @@ def _project_root(source) -> Path:
     """
     from video2mdnotes.core.downloader import sanitize_filename
 
-    root = settings.output_dir
+    root = base or settings.output_dir
     if settings.group_by_playlist and getattr(source, "playlist_title", None):
         root = root / sanitize_filename(source.playlist_title)
     return root
@@ -238,16 +241,30 @@ def _longform_waiting(run_dir: Path, **kwargs):
 
 
 def _summarize_transcript(transcript, project_dir: Path):
-    """The length gate. Short transcripts: today's single call, unchanged.
-    Long ones (> DEFAULT_MAX_WORDS): the checkpointed long-form path, which
-    writes summaries/<name>.summary.md itself. Returns a SummaryResult."""
+    """Notes for one media/video transcript: ALWAYS the long-form path (WP-M2).
+
+    There is no length gate any more. A short source used to get one call
+    with the old generic prompt and none of the long-form features (dates,
+    chapter headings, time-sensitive claims, corrections, citation audit);
+    Azure Pt 1 came out with 1 heading for 22 chapters. Now a source that
+    fits one passage is ONE passage call (chapter headings still come from
+    the structure; course map deterministic; no consistency call), and a
+    longer one is packed into as few calls as the budget allows. The
+    long-form path reads transcripts/*.md + source_meta.json from
+    `project_dir` and writes summaries/<name>.summary.md itself.
+
+    Only an empty transcript makes no call: the placeholder, as before (a
+    model given nothing fabricates). Returns a SummaryResult.
+    """
     from video2mdnotes.core import longform
     from video2mdnotes.core.summarizer import SummaryResult
 
-    if not longform.needs_longform(transcript.segments):
-        return generate_summary(transcript)
+    if not transcript.segments:
+        return SummaryResult(
+            source_file=transcript.source_file, model_name="none",
+            summary_text=EMPTY_TRANSCRIPT_PLACEHOLDER, generated_at=dt.datetime.now())
     words = longform.word_count(transcript.segments)
-    console.print(f"      [bold]Long transcript ({words:,} words):[/bold] long-form path")
+    console.print(f"      [bold]Transcript ({words:,} words):[/bold] long-form path")
     result = _longform_waiting(project_dir)
     return SummaryResult(
         source_file=transcript.source_file,
@@ -273,6 +290,10 @@ def longform(
              "cached in structure_outline.json; auto tries it only with no "
              "chapters and > 30 min of media"),
     usd_cap: float = typer.Option(None, "--usd-cap", help=USD_CAP_HELP),
+    pack: bool = typer.Option(
+        True, "--pack/--no-pack",
+        help="Pack consecutive short chapters into one passage call (default on; "
+             "each chapter keeps its own section)"),
 ):
     """Long-form notes for an EXISTING run dir — no download, no transcription.
 
@@ -296,31 +317,50 @@ def longform(
     _apply_usd_cap(usd_cap)
     run_dir = Path(run_dir).expanduser()
     out_dir = Path(out).expanduser() if out else run_dir
-    try:
-        if plan_only:
+    if plan_only:
+        # Produces no run: no RUN_DIR line, _last_run.json untouched.
+        try:
             plan = lf.build_plan(
                 run_dir, out_dir, only=only, write=False, structure=structure,
-                outline_complete=lf._default_complete if structure == "outline" else None)
-            state = lf.State(out_dir) if (out_dir / lf.STATE_FILENAME).exists() and resume else None
-            console.print(lf.describe_plan(plan, state), highlight=False, markup=False)
-            return
+                outline_complete=lf._default_complete if structure == "outline" else None,
+                pack=pack)
+        except (FileNotFoundError, ValueError) as exc:
+            console.print(f"[red]{type(exc).__name__}:[/red] {exc}")
+            raise typer.Exit(2)
+        state = lf.State(out_dir) if (out_dir / lf.STATE_FILENAME).exists() and resume else None
+        console.print(lf.describe_plan(plan, state), highlight=False, markup=False)
+        return
+    report = RunReport("longform", str(run_dir.resolve()))
+    status, code = "failed", 1
+    try:
         result = _longform_waiting(run_dir, out_dir=out_dir, only=only, resume=resume,
-                                   concurrency=max(1, concurrency), structure=structure)
+                                   concurrency=max(1, concurrency), structure=structure,
+                                   pack=pack)
+        status, code = "ok", 0
     except (FileNotFoundError, ValueError) as exc:
         console.print(f"[red]{type(exc).__name__}:[/red] {exc}")
-        raise typer.Exit(2)
+        code = 2
     except SubscriptionExhausted as exc:
         console.print(f"[yellow]Stopped (subscription exhausted):[/yellow] {exc}\n"
                       "Completed passages are checkpointed; re-run to resume.")
-        raise typer.Exit(1)
+        status = "stopped"
     except BudgetExhausted as exc:
         console.print(f"[yellow]Stopped (spend cap):[/yellow] {exc}\n"
                       "Completed passages are checkpointed; re-run to resume.")
-        raise typer.Exit(1)
+        status = "stopped"
     except lf.LongformIncomplete as exc:
         console.print(f"[red]Incomplete:[/red] {exc}")
-        raise typer.Exit(1)
+    if out_dir.exists():
+        report.add(out_dir, status)
+    if code:
+        report.emit(status)
+        raise typer.Exit(code)
     console.print(f"[green]Notes:[/green] {result.summary_path}")
+    console.print(f"Model calls: {result.model_calls} ({result.outline_calls} outline + "
+                  f"{result.passages_run} passage + {result.course_map_calls} course map + "
+                  f"{result.consistency_calls} consistency); "
+                  f"{result.passages_skipped} passage call(s) from checkpoint")
+    report.emit(status)
 
 
 @app.command()
@@ -402,6 +442,7 @@ def media(
         files += [f for f in found if f not in files]
 
     done = failed = skipped = 0
+    report = RunReport("media", ", ".join(str(Path(p).expanduser()) for p in paths))
     infos = []
     for position, source_file in enumerate(files, 1):
         label = f"[{position}/{len(files)}]"
@@ -458,6 +499,7 @@ def media(
         if not force and (summary_path.exists()
                           or (transcribe_only and transcript_path.exists())):
             console.print("      [dim]Skipping (already done)[/dim]")
+            report.add(project_dir, "skipped")
             skipped += 1
             continue
 
@@ -466,6 +508,7 @@ def media(
                 unit, progress=lambda msg: console.print(f"      [dim]{msg}[/dim]"))
         except MediaError as exc:
             console.print(f"      [red]Transcription failed:[/red] {exc}")
+            report.add(project_dir, "failed")
             failed += 1
             continue
         if len(unit) > 1:
@@ -490,15 +533,18 @@ def media(
             console.print(f"      [red]Incomplete transcript — not written:[/red] {exc}")
             console.print(f"      [dim]See {project_dir / longasr.MANIFEST_FILENAME}; "
                           "re-run to resume from checkpoints.[/dim]")
+            report.add(project_dir, "failed")
             failed += 1
             continue
         except (BackendUnavailable, ValueError, MediaError) as exc:
             console.print(f"      [red]Transcription failed:[/red] {exc}")
+            report.add(project_dir, "failed")
             failed += 1
             continue
         except Exception as exc:  # noqa: BLE001 — one bad file never stops the batch
             console.print(f"      [red]Transcription failed:[/red] {exc}")
             logger.error(f"{first.path.name}: {exc}")
+            report.add(project_dir, "failed")
             failed += 1
             continue
         transcript = long.result
@@ -514,6 +560,7 @@ def media(
         transcript_path.write_text(transcript.markdown_content, encoding="utf-8")
         console.print(f"      [green]Transcript:[/green] {transcript_path}")
         if transcribe_only:
+            report.add(project_dir, "ok")
             done += 1
             continue
 
@@ -526,21 +573,25 @@ def media(
                     result = _summarize_transcript(transcript, project_dir)
                 except Exception as retry_exc:  # noqa: BLE001
                     console.print(f"      [red]Failed after wait:[/red] {retry_exc}")
+                    report.add(project_dir, "failed")
                     failed += 1
                     continue
             else:
                 console.print(f"      [red]Stopping:[/red] {exc}")
+                report.add(project_dir, "stopped")
                 failed += 1
                 break
         except BudgetExhausted as exc:
             # Spend caps reached: every later file would fail the same way.
             console.print(f"      [red]Stopping (spend cap):[/red] {exc} "
                           "[dim](transcript kept)[/dim]")
+            report.add(project_dir, "stopped")
             failed += 1
             break
         except Exception as exc:  # noqa: BLE001
             console.print(f"      [red]Summary failed:[/red] {exc} "
                           "[dim](transcript kept)[/dim]")
+            report.add(project_dir, "failed")
             failed += 1
             continue
 
@@ -550,9 +601,11 @@ def media(
             summary_path = summaries_dir / f"{NO_SUMMARY_PREFIX}{safe_title}.summary.md"
         summary_path.write_text(result.summary_text, encoding="utf-8")
         console.print(f"      [green]Notes:[/green] {summary_path}")
+        report.add(project_dir, "ok")
         done += 1
 
     console.print(f"\n[bold]Media:[/bold] {done} done · {skipped} skipped · {failed} failed")
+    report.emit()
 
 
 @app.command()
@@ -947,9 +1000,17 @@ def process(
              "Default 'wait' — never starts spending money unattended.",
     ),
     usd_cap: float = typer.Option(None, "--usd-cap", help=USD_CAP_HELP),
+    out: Path = typer.Option(
+        None, "--out",
+        help="Run dir for a single video; output root when the URL is a playlist "
+             "(each video gets <out>/<YYYYMMDD>_<title>). Default: OUTPUT_DIR."),
 ):
     """
     Downloads, transcribes, and summarizes a video or playlist from a URL.
+
+    Prints one `RUN_DIR=<absolute path>` line per run (last lines of stdout)
+    and writes <OUTPUT_DIR>/_last_run.json — read those; never guess a run dir
+    from the title.
     """
     if on_exhaustion:
         settings.on_exhaustion = on_exhaustion.strip().lower()
@@ -963,7 +1024,9 @@ def process(
 
     logger.info(f"Starting processing for URL: {url}")
 
-    from video2mdnotes.core.downloader import sanitize_filename
+    from video2mdnotes.core.downloader import run_dir_name, sanitize_filename
+    report = RunReport("process", url)
+    out_path = Path(out).expanduser() if out else None
 
     # WP-01: a local document file bypasses the entire video pipeline. Checked
     # before anything else — an existing path is unambiguous, unlike a URL,
@@ -987,9 +1050,12 @@ def process(
         except Exception as exc:  # noqa: BLE001
             console.print(f"[red]{type(exc).__name__}:[/red] {exc}")
             raise typer.Exit(1)
+        doc_root = out_path or settings.output_dir / "articles"
         outcome = _summarize_and_write_document(
-            source, settings.output_dir / "articles", "[1/1]", force, False, None,
+            source, doc_root, "[1/1]", force, False, None,
         )
+        report.add(doc_root, _DOC_STATUS.get(outcome, "failed"))
+        report.emit()
         raise typer.Exit(0 if outcome in ("done", "skipped") else 1)
 
     # 1. Probe (metadata + caption availability; no audio yet)
@@ -1009,9 +1075,12 @@ def process(
         except Exception:  # noqa: BLE001 - report the ORIGINAL video error, not this fallback's
             logger.error(f"Processing failed: {e}")
             raise typer.Exit(code=1)
+        doc_root = out_path or settings.output_dir / "articles"
         outcome = _summarize_and_write_document(
-            source, settings.output_dir / "articles", "[1/1]", force, False, None,
+            source, doc_root, "[1/1]", force, False, None,
         )
+        report.add(doc_root, _DOC_STATUS.get(outcome, "failed"))
+        report.emit()
         raise typer.Exit(0 if outcome in ("done", "skipped") else 1)
     except Exception as e:
         logger.error(f"Processing failed: {e}")
@@ -1049,11 +1118,20 @@ def process(
         if chosen:
             profiles_mod.apply(chosen)
 
-        project_root = _project_root(source)
+        project_root = _project_root(source, out_path if len(sources) > 1 else None)
+        safe_title = sanitize_filename(source.title)
+        # The run dir: --out itself for one video; <root>/<date>_<title> else.
+        if out_path is not None and len(sources) == 1:
+            project_dir = out_path
+            pinned = project_dir / "summaries" / f"{safe_title}.summary.md"
+            existing_here = pinned if pinned.exists() and pinned.stat().st_size > 0 else None
+        else:
+            project_dir = project_root / run_dir_name(source.title)
+            existing_here = None
 
         # --visuals-only adds to notes that already exist; it never transcribes.
         if visuals_only:
-            existing = _existing_summary(sanitize_filename(source.title), project_root)
+            existing = existing_here or _existing_summary(safe_title, project_root)
             if not existing:
                 logger.warning(f"[{position}] No existing notes to add visuals to: {source.title}")
                 failed.append((source.title, "no existing notes"))
@@ -1061,15 +1139,20 @@ def process(
             try:
                 _add_visuals(existing.parent.parent, source, existing)
                 done.append(source.title)
+                report.add(existing.parent.parent, "ok", source.url)
             except Exception as e:  # noqa: BLE001
                 logger.error(f"[{position}] Visuals failed: {source.title} — {e}")
                 failed.append((source.title, str(e)))
+                report.add(existing.parent.parent, "failed", source.url)
             continue
 
-        already = _existing_summary(sanitize_filename(source.title), project_root)
+        already = existing_here or (
+            None if out_path is not None and len(sources) == 1
+            else _existing_summary(safe_title, project_root))
         if already and not force:
             logger.info(f"[{position}] Skipping (already summarized): {source.title}")
             skipped.append(source.title)
+            report.add(already.parent.parent, "skipped", source.url)
             continue
 
         # Per-video isolation: one bad video must not abandon the rest of a
@@ -1089,10 +1172,6 @@ def process(
                         "Only machine captions available — using Whisper instead "
                         "(auto-captions are ASR without our vocabulary hint)."
                     )
-
-            safe_title = sanitize_filename(source.title)
-            date_str = dt.date.today().strftime('%Y%m%d')
-            project_dir = project_root / f"{date_str}_{safe_title}"
 
             audio_path = None
             if transcript_result is None:
@@ -1159,15 +1238,8 @@ def process(
                     _wait_for_reset(e)
             logger.success("Summary Generated.")
 
-            # 4. Archive / Output
+            # 4. Archive / Output — into the SAME run dir as the transcript.
             logger.info("Step 4: Archiving Results...")
-            
-            from video2mdnotes.core.downloader import sanitize_filename
-            safe_title = sanitize_filename(download_result.title)
-            date_str = dt.date.today().strftime('%Y%m%d')
-            project_dir_name = f"{date_str}_{safe_title}"
-            
-            project_dir = project_root / project_dir_name
             project_dir.mkdir(parents=True, exist_ok=True)
 
             transcripts_dir = project_dir / "transcripts"
@@ -1226,7 +1298,10 @@ def process(
             # nothing on screen either) is a legitimate outcome, but in a
             # listing it looks identical to a real result. Mark it.
             if settings.mark_empty_results and not visuals.has_usable_notes(summary_text):
-                project_dir = _mark_empty(project_dir)
+                report.add(project_dir, "ok", source.url)
+                marked = _mark_empty(project_dir)
+                report.rename(project_dir, marked)
+                project_dir = marked
                 summary_path = project_dir / "summaries" / summary_path.name
                 logger.warning(
                     f"[{position}] No usable notes produced — marked "
@@ -1241,25 +1316,30 @@ def process(
                 border_style="green"
             ))
             done.append(source.title)
+            report.add(project_dir, "ok", source.url)
 
         except SubscriptionExhausted as e:
             # Policy is not "wait" (that retries in place), so end the run here
             # rather than burn the rest of the playlist on failures or spend.
             logger.error(f"[{position}] Subscription exhausted: {e}")
             stopped_at = f"{position} — {source.title}"
+            report.add(project_dir, "stopped", source.url)
             break
         except BudgetExhausted as e:
             # Spend caps reached; the transcript is already on disk, so a
             # re-run after raising the cap resumes from here.
             logger.error(f"[{position}] Spend cap reached: {e}")
             stopped_at = f"{position} — {source.title} (spend cap)"
+            report.add(project_dir, "stopped", source.url)
             break
         except KeyboardInterrupt:
             stopped_at = f"{position} — {source.title} (interrupted)"
+            report.add(project_dir, "stopped", source.url)
             break
         except Exception as e:  # noqa: BLE001 - one bad video must not end the run
             logger.error(f"[{position}] Failed: {source.title} — {e}")
             failed.append((source.title, str(e)))
+            report.add(project_dir, "failed", source.url)
             continue
 
     # Final ledger, so an unattended run leaves a readable account of itself.
@@ -1281,6 +1361,7 @@ def process(
         title="Run Summary" if not stopped_at else "Run Stopped",
         border_style="green" if not (failed or stopped_at) else "yellow",
     ))
+    report.emit("stopped" if stopped_at else None)
 
     if stopped_at or failed:
         raise typer.Exit(code=1)

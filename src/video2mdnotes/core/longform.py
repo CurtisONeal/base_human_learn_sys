@@ -1,15 +1,18 @@
 """Long recordings → complete, traceable, dated notes (WP-3 + WP-7).
 
-A transcript over ``DEFAULT_MAX_WORDS`` cannot go through the single-call
-``generate_summary`` — a 12-hour course is ~120k words. This module wires the
-pure pieces built in WP-1/2/4/5/8 into one checkpointed pipeline:
+Every media transcript comes here, however short (WP-M2): a 12-hour course
+(~120k words) and a 70-second clip alike. This module wires the pure pieces
+built in WP-1/2/4/5/8 into one checkpointed pipeline:
 
     source_meta.json (or yt_info.json)  ->  SourceMeta          core/metadata.py
     transcript provenance                ->  "auto-captions"     core/quality.py
     glossary correction                  ->  corrected copy + corrections.json
     structure ladder on CORRECTED text   ->  chapters / parts    core/structure.py
-    one model call per passage           ->  chunk_summaries/ + ledger/  (resumable)
+    one model call per PACK              ->  chunk_summaries/ + ledger/  (resumable)
+      (a pack = adjacent whole chapters, one call, split back per chapter;
+       the whole source when it fits; each part of a split chapter alone)
     one course-map call per batch        ->  ## Course Map rows + candidate themes
+      (none when there is a single call: a deterministic table instead)
     one themes call (candidates only)    ->  ### Cross-chapter themes (<= 8)
     deterministic assembly               ->  summaries/<name>.summary.md
     deterministic lint + fix of notes    ->  corrections.json gets `notes:` entries
@@ -65,11 +68,20 @@ COURSE_MAP_PROMPT = PROMPT_DIR / "longform" / "course_map.md"
 THEMES_PROMPT = PROMPT_DIR / "longform" / "course_map_themes.md"
 MISHEARING_FRAGMENT = PROMPT_DIR / "fragments" / "mishearing_hint.md"
 LEDGER_FRAGMENT = PROMPT_DIR / "fragments" / "ledger.md"
+MULTI_CHAPTER_FRAGMENT = PROMPT_DIR / "fragments" / "multi_chapter.md"
 
 OVERLAP_S = 150.0
 LEDGER_MAX_WORDS = 800
 CONTEXT_ONLY_LABEL = "CONTEXT ONLY — do not summarize"
 STATE_FILENAME = "longform_state.json"
+STRUCTURE_FILENAME = "structure.json"
+# Packing (WP-M2): consecutive whole chapters share ONE passage call until the
+# pack reaches PACK_MIN_WORDS words or PACK_MIN_S seconds (never over the word
+# budget, never splitting a chapter). Each chapter still gets its own `##`
+# section, range and citations. T3 (Karpathy) made 30 calls for 30 chapters,
+# several of them 1-3 minutes long.
+PACK_MIN_WORDS = 3000
+PACK_MIN_S = 8 * 60
 CHUNK_DIR = "chunk_summaries"
 LEDGER_DIR = "ledger"
 COURSE_MAP_HEADING = "Course Map"
@@ -233,10 +245,18 @@ class Plan:
     structure_mode: str = "auto"
     outline: Optional[outline_mod.OutlineResult] = None   # None: rung not tried
     raw_segments: List[Segment] = field(default_factory=list)   # 1:1 with `segments`
+    # Model-call units over `selected` (WP-M2): each pack is consecutive whole
+    # chapters summarized in ONE call, or one part of a split chapter.
+    packs: List[List[Passage]] = field(default_factory=list)
 
     @property
     def passages(self) -> List[Passage]:
         return [p for ch in self.selected for p in ch]
+
+    @property
+    def calls_units(self) -> List[List[Passage]]:
+        """`packs`, or one pack per passage when none were computed."""
+        return self.packs or [[p] for p in self.passages]
 
     @property
     def provenance_label(self) -> str:
@@ -291,6 +311,86 @@ def select_chapters(chapters: List[List[Passage]], only: Optional[str]) -> List[
     return chosen
 
 
+def _adjacent(a: Passage, b: Passage) -> bool:
+    return b.chapter_no == a.chapter_no + 1
+
+
+def _pack_words(pack: Sequence[Passage]) -> int:
+    return sum(p.words for p in pack)
+
+
+def _pack_full(pack: Sequence[Passage], min_words: int, min_s: float) -> bool:
+    return bool(pack) and (_pack_words(pack) >= min_words
+                           or pack[-1].end_s - pack[0].start_s >= min_s)
+
+
+def pack_passages(
+    chapters: Sequence[List[Passage]],
+    max_words: int = DEFAULT_MAX_WORDS,
+    *,
+    min_words: int = PACK_MIN_WORDS,
+    min_s: float = PACK_MIN_S,
+    enabled: bool = True,
+) -> List[List[Passage]]:
+    """Model-call units (WP-M2). Deterministic.
+
+    * A chapter split into parts keeps one call per part (the parts are over
+      budget together; they carry the ledger from part to part).
+    * Whole chapters are packed: when ALL selected chapters are whole, adjacent
+      and fit in `max_words` together, they are ONE call; otherwise
+      consecutive whole chapters are packed greedily until a pack reaches
+      `min_words` words or `min_s` seconds, never over `max_words` and never
+      splitting a chapter. An under-target pack left at the end of a run joins
+      the pack before it when it fits.
+    * Packs never join chapters that are not adjacent (`--only 1,5`).
+    """
+    if not enabled:
+        return [[p] for ch in chapters for p in ch]
+    chapters = [ch for ch in chapters if ch]
+    whole = [ch[0] for ch in chapters if len(ch) == 1]
+    if (chapters and len(whole) == len(chapters)
+            and all(_adjacent(a, b) for a, b in zip(whole, whole[1:]))
+            and _pack_words(whole) <= max_words):
+        return [whole]
+    packs: List[List[Passage]] = []
+    mergeable: List[bool] = []          # pack of whole chapters (not a part)
+    cur: List[Passage] = []
+
+    def flush():
+        nonlocal cur
+        if cur:
+            if (packs and mergeable[-1] and not _pack_full(cur, min_words, min_s)
+                    and _adjacent(packs[-1][-1], cur[0])
+                    and _pack_words(packs[-1]) + _pack_words(cur) <= max_words):
+                packs[-1].extend(cur)
+            else:
+                packs.append(cur)
+                mergeable.append(True)
+        cur = []
+
+    for ch in chapters:
+        if len(ch) > 1:
+            flush()
+            for p in ch:
+                packs.append([p])
+                mergeable.append(False)
+            continue
+        p = ch[0]
+        if cur and (not _adjacent(cur[-1], p) or _pack_full(cur, min_words, min_s)
+                    or _pack_words(cur) + p.words > max_words):
+            flush()
+        cur.append(p)
+    flush()
+    return packs
+
+
+def pack_key(pack: Sequence[Passage]) -> str:
+    """State/cache key of one model call: the passage key, or a range key."""
+    if len(pack) == 1:
+        return pack[0].key
+    return f"pack_{pack[0].chapter_no:02d}-{pack[-1].chapter_no:02d}"
+
+
 def build_plan(
     run_dir: Path,
     out_dir: Optional[Path] = None,
@@ -300,6 +400,7 @@ def build_plan(
     write: bool = True,
     structure: str = "auto",
     outline_complete: Optional[CompleteFn] = None,
+    pack: bool = True,
 ) -> Plan:
     """Everything deterministic: meta, provenance, correction, structure, passages.
 
@@ -351,14 +452,16 @@ def build_plan(
         outline_source=(outline_res.model or "a model") if outline_res else "a model",
         outline_note=outline_res.note if outline_res and outline_res.entries is None else "")
     chapters = _chapters(structure_res)
+    selected = select_chapters(chapters, only)
     return Plan(
         run_dir=run_dir, out_dir=out_dir, name=name, raw_transcript=raw,
         meta=meta, meta_origin=meta_origin, provenance=provenance,
         glossary=glossary, corrections=corrections, segments=corrected,
         structure=structure_res, skeleton=course_skeleton(structure_res, meta),
         profile=domains.longform_profile(meta),
-        chapters=chapters, selected=select_chapters(chapters, only),
+        chapters=chapters, selected=selected,
         structure_mode=structure, outline=outline_res, raw_segments=list(segments),
+        packs=pack_passages(selected, max_words, enabled=pack),
     )
 
 
@@ -464,6 +567,90 @@ def render_passage_prompt(
         + timestamped_lines(plan.segments, a, b) + "\nEND OF PASSAGE"
     )
     return PassagePrompt(passage_system_prompt(plan), "\n\n".join(blocks) + "\n")
+
+
+def pack_marker(p: Passage) -> str:
+    """The `##` line a multi-chapter reply opens each chapter's notes with."""
+    return "## Preamble" if p.chapter_no == 0 else f"## Chapter {p.chapter_no}"
+
+
+def pack_span(pack: Sequence[Passage]) -> str:
+    """"chapters 3–7", "the Preamble and chapter 1"."""
+    nums = [p.chapter_no for p in pack if p.chapter_no]
+    pre = any(p.chapter_no == 0 for p in pack)
+    span = (f"chapter {nums[0]}" if len(nums) == 1
+            else f"chapters {nums[0]}–{nums[-1]}" if nums else "")
+    return "the Preamble and " + span if pre and span else "the Preamble" if pre else span
+
+
+def _pack_where(pack: Sequence[Passage]) -> str:
+    return (f"{pack_span(pack)} together ({len(pack)} sections, summarized in one call) "
+            f"[{time_locator(pack[0].start_s, pack[-1].end_s)}]")
+
+
+def render_pack_prompt(plan: Plan, pack: Sequence[Passage]) -> PassagePrompt:
+    """The (system, user) pair for one model call. A one-passage pack is the
+    ordinary passage prompt; a multi-chapter pack lists its chapters with the
+    marker each must open with, and marks every chapter's start in the
+    transcript, so the reply splits back into per-chapter notes."""
+    if len(pack) == 1:
+        return render_passage_prompt(plan, pack[0])
+    system = (passage_system_prompt(plan).rstrip() + "\n\n"
+              + MULTI_CHAPTER_FRAGMENT.read_text(encoding="utf-8").rstrip() + "\n")
+    listing = "\n".join(
+        f"{pack_marker(p)} — {display_title(plan, p.title)} [{p.range}]" for p in pack)
+    body = []
+    for p in pack:
+        label = ("PREAMBLE" if p.chapter_no == 0
+                 else f'CHAPTER {p.chapter_no} "{display_title(plan, p.title)}"')
+        body.append(f"--- {label} [{p.range}] ---")
+        a, b = p.span
+        body.append(timestamped_lines(plan.segments, a, b) if b > a
+                    else "(no transcript lines in this chapter)")
+    blocks = [
+        f"SOURCE: {prompt_header(plan.meta, plan.provenance_label)}",
+        "COURSE SKELETON (the whole recording; context only):\n" + plan.skeleton,
+        f"THIS PASSAGE: {_pack_where(pack)}.",
+        "Write one block per chapter, in this order, each opening with its marker "
+        "line exactly as given:\n" + listing,
+        f"PASSAGE TRANSCRIPT ({_pack_words(pack):,} words; each chapter starts at its "
+        "`--- CHAPTER` line) — write notes for these lines:\n"
+        + "\n".join(body) + "\nEND OF PASSAGE",
+    ]
+    return PassagePrompt(system, "\n\n".join(blocks) + "\n")
+
+
+_PACK_HEAD = re.compile(r"^#{1,2}\s*\**\s*(?:chapter\s+(\d+)\b|(preamble)\b)", re.I)
+
+
+def split_pack_output(notes: str, pack: Sequence[Passage]) -> Tuple[Dict[str, str], List[str]]:
+    """({passage key: that chapter's notes}, keys with no block) from a
+    multi-chapter reply. Blocks are found by their `## Chapter <n>` /
+    `## Preamble` marker lines outside code fences; anything before the first
+    marker (a chat opener) is dropped; a chapter written twice is joined."""
+    by_no = {p.chapter_no: p for p in pack}
+    chunks: Dict[str, List[str]] = {}
+    current: Optional[str] = None
+    fenced = False
+    for line in (notes or "").split("\n"):
+        if _FENCE_RE.match(line):
+            fenced = not fenced
+        elif not fenced:
+            m = _PACK_HEAD.match(line.strip())
+            if m:
+                no = 0 if m.group(2) else int(m.group(1))
+                if no in by_no:
+                    current = by_no[no].key
+                    chunks.setdefault(current, [])
+                    continue
+        if current is not None:
+            chunks[current].append(line)
+    out = {}
+    for key, lines in chunks.items():
+        text = "\n".join(lines).strip()
+        if text:
+            out[key] = text + "\n"
+    return out, [p.key for p in pack if p.key not in out]
 
 
 # --- ledger ------------------------------------------------------------------
@@ -805,9 +992,17 @@ class LongformResult:
     passages_run: int = 0
     passages_skipped: int = 0
     course_map_calls: int = 0
+    consistency_calls: int = 0
+    outline_calls: int = 0
     course_map_fallback: List[str] = field(default_factory=list)
     notes_corrections: List[dict] = field(default_factory=list)
     lint_residual: List[dict] = field(default_factory=list)
+
+    @property
+    def model_calls(self) -> int:
+        """Model calls THIS run made (checkpointed/cached ones excluded)."""
+        return (self.outline_calls + self.passages_run + self.course_map_calls
+                + self.consistency_calls)
 
 
 def _run_chapter(plan: Plan, chapter: List[Passage], state: State, complete: CompleteFn,
@@ -864,9 +1059,96 @@ def _run_chapter(plan: Plan, chapter: List[Passage], state: State, complete: Com
         ledger, prev = led, p
 
 
+def _run_pack(plan: Plan, pack: List[Passage], state: State, complete: CompleteFn,
+              resume: bool, stop: threading.Event, counters: dict,
+              progress: Progress) -> None:
+    """One model call for several whole chapters; the reply is split back into
+    per-chapter notes, each audited against its OWN chapter's lines and
+    checkpointed under its own passage key. A chapter the reply has no block
+    for is re-run on its own (one extra call), so every chapter's notes come
+    from the model, never from a neighbour."""
+    key = pack_key(pack)
+    if resume and all(is_done(state, plan.out_dir, p) for p in pack):
+        with state.lock:
+            counters["skipped"] += 1
+        progress(f"  skip {key} (checkpoint, {len(pack)} chapters)")
+        return
+    if stop.is_set():
+        return
+    prompt = render_pack_prompt(plan, pack)
+    started = _now()
+    for p in pack:
+        state.update("passages", p.key, status="running", started_at=started,
+                     chapter=p.chapter_no, title=p.title, part=p.part, parts=p.parts,
+                     start_s=p.start_s, end_s=p.end_s, pack=key, pack_size=len(pack))
+    progress(f"  run  {key} [{time_locator(pack[0].start_s, pack[-1].end_s)}] "
+             f"{_pack_words(pack):,} words, {len(pack)} chapters in one call")
+    try:
+        output, model = complete(prompt.system, prompt.user)
+    except (summarizer.SubscriptionExhausted, BudgetExhausted) as exc:
+        for p in pack:
+            state.update("passages", p.key, status="pending",
+                         stopped=f"{type(exc).__name__}: {str(exc)[:200]}")
+        stop.set()
+        raise
+    except Exception as exc:  # noqa: BLE001 - record; other units continue
+        for p in pack:
+            state.update("passages", p.key, status="failed", error=str(exc)[:400])
+        raise
+    with state.lock:
+        counters["run"] += 1
+    _atomic_write(Path(plan.out_dir) / CHUNK_DIR / f"_{key}.raw.txt", output)
+    notes_all, led, err = extract_ledger(output)
+    notes_all = summarizer._strip_chat_preamble(notes_all)
+    blocks, missing = split_pack_output(notes_all, pack)
+    source = "model"
+    if led is None:
+        led, source = _fallback_ledger(None, next(iter(blocks.values()), "")), f"fallback ({err})"
+    led, dropped = cap_ledger(led)
+    for p in pack:
+        if p.key not in blocks:
+            continue
+        notes, audit = audit_passage_notes(plan, p, blocks[p.key].rstrip() + "\n")
+        record_citation_audit(plan.out_dir, p, audit)
+        _atomic_write(chunk_path(plan.out_dir, p), notes)
+        _atomic_write(ledger_path(plan.out_dir, p),
+                      json.dumps(led, indent=2, ensure_ascii=False) + "\n")
+        state.update("passages", p.key, status="done", model=model, finished_at=_now(),
+                     ledger_words=_ledger_words(led), ledger_dropped=dropped,
+                     citation_audit=_audit_counts(audit), ledger_source=source,
+                     notes_words=len(notes.split()), error=None, stopped=None,
+                     pack=key, pack_size=len(pack))
+    if missing:
+        progress(f"  WARNING {key}: no block for {', '.join(missing)} — re-running "
+                 f"{'it' if len(missing) == 1 else 'them'} on {'its' if len(missing) == 1 else 'their'} own")
+        for p in pack:
+            if p.key in missing:
+                state.update("passages", p.key, status="pending", pack=key,
+                             pack_missing=True)
+        for p in pack:
+            if p.key in missing:
+                _run_chapter(plan, [p], state, complete, False, stop, counters, progress)
+
+
+def work_units(plan: Plan) -> List[List[List[Passage]]]:
+    """Packs grouped into units that run in order: the parts of one split
+    chapter are one unit (each part's ledger feeds the next); every other
+    pack is a unit of its own. Units are independent of each other."""
+    units: List[List[List[Passage]]] = []
+    for pk in plan.calls_units:
+        p = pk[0]
+        if (len(pk) == 1 and p.parts > 1 and units and len(units[-1][-1]) == 1
+                and units[-1][-1][0].group_id == p.group_id):
+            units[-1].append(pk)
+        else:
+            units.append([pk])
+    return units
+
+
 def run_passages(plan: Plan, state: State, complete: CompleteFn, *, resume: bool = True,
                  concurrency: int = 1, progress: Progress = print) -> Tuple[int, int]:
-    """Run every selected passage not already checkpointed. Returns (run, skipped).
+    """Run every selected pack not already checkpointed. Returns (calls made,
+    calls skipped) — a multi-chapter pack is one call.
 
     Exhaustion (SubscriptionExhausted / BudgetExhausted) stops new passages and
     is re-raised after in-flight chapters finish their current passage; every
@@ -877,20 +1159,25 @@ def run_passages(plan: Plan, state: State, complete: CompleteFn, *, resume: bool
     counters = {"run": 0, "skipped": 0}
     errors: List[Tuple[str, BaseException]] = []
 
-    def one(chapter):
+    def one(unit):
         try:
-            _run_chapter(plan, chapter, state, complete, resume, stop, counters, progress)
+            if len(unit[0]) > 1:
+                _run_pack(plan, unit[0], state, complete, resume, stop, counters, progress)
+            else:
+                _run_chapter(plan, [pk[0] for pk in unit], state, complete, resume, stop,
+                             counters, progress)
         except BaseException as exc:  # noqa: BLE001
-            errors.append((chapter[0].title, exc))
+            errors.append((unit[0][0].title, exc))
 
+    units = work_units(plan)
     if concurrency <= 1:
-        for chapter in plan.selected:
-            one(chapter)
+        for unit in units:
+            one(unit)
             if stop.is_set():
                 break
     else:
         with ThreadPoolExecutor(max_workers=concurrency) as pool:
-            list(pool.map(one, plan.selected))
+            list(pool.map(one, units))
 
     for _, exc in errors:
         if isinstance(exc, (summarizer.SubscriptionExhausted, BudgetExhausted)):
@@ -1385,6 +1672,49 @@ def build_course_map(plan: Plan, notes_by_key: Dict[str, str], state: State,
     return "\n".join(out) + "\n", models, calls, fallbacks
 
 
+def deterministic_course_map(plan: Plan, notes_by_key: Dict[str, str]) -> str:
+    """The Course Map with NO model call (WP-M2): used when the whole source
+    was one passage call, so a course-map call would only re-read what that
+    one call already wrote. Chapter and range columns come from the skeleton,
+    the gist is each chapter's first summary point."""
+    rows = []
+    for ch in plan.selected:
+        gist = notes_format.sanitize_cell(
+            _deterministic_gist([notes_by_key[p.key] for p in ch]))
+        rows.append(f"| {_chapter_label(ch)} | "
+                    f"{notes_format.sanitize_cell(display_title(plan, ch[0].title))} "
+                    f"| [{_chapter_range(ch)}] | {gist} |")
+    out = [f"## {COURSE_MAP_HEADING}", "", "| # | chapter | time range | gist |",
+           "|---|---|---|---|", *rows, "",
+           "> Course map: deterministic — the whole source was summarized in one "
+           "passage call, so no course-map call was made; each gist is the "
+           "chapter's first summary point.",
+           "", f"### {THEMES_HEADING}", "",
+           "- Not computed: a single passage call has no cross-call themes to consolidate."]
+    return "\n".join(out) + "\n"
+
+
+def structure_record(plan: Plan) -> dict:
+    """structure.json: the sections the notes are organised by, and how they
+    were found. The evaluator's P1 falls back to it when the source declares
+    no chapters — graded as the pipeline's own claim, labelled as such."""
+    return {
+        "rung": plan.structure.rung,
+        "structure_is_inferred": plan.structure.structure_is_inferred,
+        "provenance": plan.structure.provenance,
+        "fallback_reason": plan.structure.fallback_reason,
+        "sections": [
+            {"label": _chapter_label(ch), "title": ch[0].title,
+             "display_title": display_title(plan, ch[0].title),
+             "start_s": ch[0].start_s, "end_s": ch[-1].end_s,
+             "range": _chapter_range(ch), "parts": len(ch),
+             "preamble": ch[0].chapter_no == 0}
+            for ch in plan.chapters],
+        "packs": [{"key": pack_key(pk), "passages": [p.key for p in pk],
+                   "words": _pack_words(pk)} for pk in plan.calls_units],
+    }
+
+
 # --- assembly -----------------------------------------------------------------------
 
 
@@ -1618,8 +1948,9 @@ def _source_block(plan: Plan, models: Sequence[str], partial: bool,
         f"> {prompt_header(m, plan.provenance_label)}",
         f"> Structure: {plan.structure.provenance} (rung: {plan.structure.rung}"
         f"{', INFERRED' if plan.structure.structure_is_inferred else ''})",
-        f"> Notes: {len(plan.passages)} passage(s) over {counts['chapters_included']} of "
-        f"{counts['chapters_total']} chapter(s){pre} ({total} passages in all); "
+        f"> Notes: {len(plan.calls_units)} passage call(s) for {len(plan.passages)} "
+        f"section(s) over {counts['chapters_included']} of "
+        f"{counts['chapters_total']} chapter(s){pre} ({total} sections in all); "
         f"profile: {plan.profile}; "
         f"models: {', '.join(sorted(set(models))) or 'none'}",
         f"> Transcript: `transcripts/{corrected}` ({len(plan.corrections)} glossary "
@@ -1741,6 +2072,7 @@ def assemble(plan: Plan, notes_by_key: Dict[str, str], course_map_md: str,
             # The preamble is not a chapter (WP-F3): E1 said 14 for 13 chapters.
             **_chapter_counts(plan),
             "passages": len(plan.passages),
+            "passage_calls": len(plan.calls_units),
             "partial": partial,
             **({"recorded_estimate": recorded.frontmatter_value()} if recorded else {}),
         },
@@ -1868,10 +2200,14 @@ def check_rule_findings(notes: str) -> List[str]:
 
 
 def estimated_calls(plan: Plan, state: Optional[State] = None) -> Tuple[int, int]:
-    """(passage calls, course-map calls) still to make. With more than one
-    batch the course map adds one themes-consolidation call."""
-    todo = [p for p in plan.passages
-            if state is None or not is_done(state, plan.out_dir, p)]
+    """(passage calls, course-map calls) still to make. A multi-chapter pack
+    is one passage call. With more than one batch the course map adds one
+    themes-consolidation call; with a single passage call there is no
+    course-map call at all."""
+    todo = [pk for pk in plan.calls_units
+            if state is None or not all(is_done(state, plan.out_dir, p) for p in pk)]
+    if len(plan.calls_units) <= 1:
+        return len(todo), 0          # deterministic course map (WP-M2)
     batches = len(course_map_batches(plan.selected))
     return len(todo), batches + (1 if batches > 1 else 0)
 
@@ -1893,15 +2229,19 @@ def describe_plan(plan: Plan, state: Optional[State] = None) -> str:
         lines.append(f"Outline: {how}"
                      + (f" · model: {o.model}" if o.model else "")
                      + (f" · {o.note}" if o.note else ""))
+    call_of = {p.key: n for n, pk in enumerate(plan.calls_units, 1) for p in pk}
     lines += [
         "",
-        "  #  key                                              range                  words",
+        "  #  call  key                                              range                  words",
     ]
     for ch in plan.chapters:
         mark = "*" if ch in plan.selected else " "
         for p in ch:
             done = " done" if state is not None and is_done(state, plan.out_dir, p) else ""
-            lines.append(f"{mark} {_chapter_label(ch):>2} {p.key:<48} [{p.range}] {p.words:>7,}{done}")
+            call = f"c{call_of[p.key]:02d}" if p.key in call_of else "  - "
+            lines.append(f"{mark} {_chapter_label(ch):>2} {call:>5} {p.key:<48} "
+                         f"[{p.range}] {p.words:>7,}{done}")
+    packed = [pk for pk in plan.calls_units if len(pk) > 1]
     lines += [
         "",
         f"Chapters: {len(plan.chapters)} ({sum(1 for c in plan.chapters if c[0].chapter_no)} "
@@ -1909,11 +2249,21 @@ def describe_plan(plan: Plan, state: Optional[State] = None) -> str:
         else f"Chapters: {len(plan.chapters)}",
         f"Passages: {sum(len(c) for c in plan.chapters)} in all, {split} chapter(s) split; "
         f"selected: {len(plan.passages)} passage(s) in {len(plan.selected)} chapter(s)",
+        f"Packed: {len(plan.calls_units)} passage call(s) for {len(plan.passages)} "
+        f"passage(s); {len(packed)} call(s) cover several chapters "
+        f"(whole chapters packed until >= {PACK_MIN_WORDS:,} words or "
+        f">= {PACK_MIN_S / 60:.0f} min; a chapter is never split)",
+        *[f"  {pack_key(pk)}: {pack_span(pk)} "
+          f"[{time_locator(pk[0].start_s, pk[-1].end_s)}] {_pack_words(pk):,} words, "
+          f"{len(pk)} sections" for pk in packed],
         f"Estimated model calls: {passage_calls} passage + {map_calls} course map = "
         f"{passage_calls + map_calls}"
         + (" (+1 outline)" if plan.outline is not None and plan.outline.entries is None
            and not plan.outline.cached and not plan.outline.called else "")
-        + (" (+1 consistency check unless cached)" if len(plan.selected) > 1 else ""),
+        + (" (+1 consistency check unless cached)"
+           if len(plan.selected) > 1 and len(plan.calls_units) > 1 else "")
+        + (" (single passage call: deterministic course map, no consistency call)"
+           if len(plan.calls_units) <= 1 else ""),
         "",
         plan.skeleton,
     ]
@@ -1931,15 +2281,22 @@ def run_longform(
     max_words: int = DEFAULT_MAX_WORDS,
     progress: Progress = print,
     structure: str = "auto",
+    pack: bool = True,
 ) -> LongformResult:
     """The long-form path on a run dir that already has a transcript.
+
+    Every media transcript comes here (WP-M2), however short: one passage call
+    when the whole source fits, with the course map rendered deterministically
+    and no consistency call; packed calls otherwise.
 
     Raises SubscriptionExhausted / BudgetExhausted (checkpoints intact; rerun
     resumes) and LongformIncomplete (some passages failed for other reasons).
     """
     complete = complete or _default_complete
     plan = build_plan(run_dir, out_dir, only=only, max_words=max_words, write=True,
-                      structure=structure, outline_complete=complete)
+                      structure=structure, outline_complete=complete, pack=pack)
+    _atomic_write(plan.out_dir / STRUCTURE_FILENAME,
+                  json.dumps(structure_record(plan), indent=2, ensure_ascii=False) + "\n")
     state = State(plan.out_dir)
     if plan.outline is not None:
         with state.lock:
@@ -1949,8 +2306,8 @@ def run_longform(
                 "note": plan.outline.note, "file": outline_mod.CACHE_FILENAME,
             }
             state.save()
-    progress(f"Long-form: {len(plan.passages)} passage(s) in {len(plan.selected)} chapter(s); "
-             f"{plan.structure.provenance}")
+    progress(f"Long-form: {len(plan.calls_units)} passage call(s) for {len(plan.passages)} "
+             f"passage(s) in {len(plan.selected)} chapter(s); {plan.structure.provenance}")
     ran, skipped = run_passages(plan, state, complete, resume=resume,
                                 concurrency=concurrency, progress=progress)
 
@@ -1959,16 +2316,29 @@ def run_longform(
     models = [state.passage(p.key).get("model") for p in plan.passages]
     models = [m for m in models if m]
 
-    course_map_md, map_models, map_calls, map_fallbacks = build_course_map(
-        plan, notes_by_key, state, complete, resume=resume, progress=progress)
-    models += map_models
+    single_call = len(plan.calls_units) <= 1
+    if single_call:
+        # WP-M2: one call wrote every section; a course-map call would only
+        # re-read it, and there is no second call to be inconsistent with.
+        course_map_md, map_models, map_calls, map_fallbacks = (
+            deterministic_course_map(plan, notes_by_key), [], 0, [])
+        cons = consistency.ConsistencyResult(
+            dict(notes_by_key), "skipped", "single passage call: one call wrote every section")
+        with state.lock:
+            state.data["consistency"] = {**cons.state_record(), "finished_at": _now()}
+            state.save()
+        progress("  skip course map + consistency calls (single passage call)")
+    else:
+        course_map_md, map_models, map_calls, map_fallbacks = build_course_map(
+            plan, notes_by_key, state, complete, resume=resume, progress=progress)
+        models += map_models
 
-    # Cross-section consistency (WP-F8): one call over extracted statements;
-    # annotations only, on an in-memory copy (checkpoints stay as written).
-    notes_by_key, cons = run_consistency(plan, notes_by_key, state, complete,
-                                         resume=resume, progress=progress)
-    if cons.model and cons.called:
-        models.append(cons.model)
+        # Cross-section consistency (WP-F8): one call over extracted statements;
+        # annotations only, on an in-memory copy (checkpoints stay as written).
+        notes_by_key, cons = run_consistency(plan, notes_by_key, state, complete,
+                                             resume=resume, progress=progress)
+        if cons.model and cons.called:
+            models.append(cons.model)
 
     run_id = state.data.get("run_id") or current_run_id()
     audit = load_citation_audit(plan.out_dir, [p.key for p in plan.passages])
@@ -1988,6 +2358,8 @@ def run_longform(
             "finished_at": _now(), "summary": str(summary_path.relative_to(plan.out_dir)),
             "passages": [p.key for p in plan.passages], "notes_corrections": len(logged),
             "lint_residual": len(residual), "course_map_calls": map_calls,
+            "passage_calls": ran, "passage_calls_skipped": skipped,
+            "packs": [pack_key(pk) for pk in plan.calls_units],
             "course_map_fallbacks": map_fallbacks, **info,
             "consistency": {"status": cons.status, "applied": sum(
                 1 for e in cons.log if e.get("applied")), "reason": cons.reason},
@@ -2000,5 +2372,7 @@ def run_longform(
     return LongformResult(
         summary_path=summary_path, notes=fixed, models=sorted(set(models)),
         passages_run=ran, passages_skipped=skipped, course_map_calls=map_calls,
+        consistency_calls=1 if cons.called else 0,
+        outline_calls=1 if plan.outline is not None and plan.outline.called else 0,
         course_map_fallback=map_fallbacks, notes_corrections=logged, lint_residual=residual,
     )
