@@ -303,3 +303,28 @@ def test_p3_short_clip_tail_slack():
     assert not cut["pass"] and cut["details"]["tail_s"] == 120.0
     # an internal gap still fails a short clip
     assert not lf.check_p3(inp([0, 130, 140], 150.0), max_gap=120)["pass"]
+
+
+def test_p3_excuses_only_measured_silence(tmp_path):
+    """Tape/MP3 sources can have long silent stretches (leader, run-out,
+    pauses). P3 excuses a gap or tail only when windowed ASR measured it as
+    silence; an unmeasured stretch of the same length still fails."""
+    import json
+    from video2mdnotes.eval.longform import RunInputs, TranscriptLine, check_p3, load_silences
+
+    lines = [TranscriptLine(float(t), "x") for t in (0, 30, 60, 300, 330, 360)]
+    unmeasured = RunInputs(run_dir=tmp_path, transcript=lines, duration=600.0)
+    r = check_p3(unmeasured)
+    assert not r["pass"] and r["details"]["gaps_over_limit"]
+
+    asr = tmp_path / "asr"
+    asr.mkdir()
+    # Window 2 of a file that starts at 100 s on the timeline: offsets are relative.
+    (asr / "00_001.json").write_text(json.dumps({
+        "file_offset_s": 100.0, "ext_start_s": 0.0,
+        "silences": [[-30.0, 195.0], [265.0, 500.0]]}))
+    measured = RunInputs(run_dir=tmp_path, transcript=lines, duration=600.0,
+                         silences=load_silences(tmp_path))
+    r = check_p3(measured)
+    assert r["pass"], r
+    assert "measured silence" in r["summary"]

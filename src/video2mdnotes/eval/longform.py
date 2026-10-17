@@ -165,6 +165,49 @@ class RunInputs:
     chapters: list[str] = field(default_factory=list)
     chapters_source: str | None = None
     warnings: list[str] = field(default_factory=list)
+    # Measured silence [(start_s, end_s)] on the source timeline, from the
+    # windowed-ASR checkpoints (asr/*.json, ffmpeg silencedetect). Empty when
+    # the transcript came from captions or no measurement exists.
+    silences: list[tuple[float, float]] = field(default_factory=list)
+
+
+def load_silences(run_dir: Path) -> list[tuple[float, float]]:
+    """Absolute silence intervals from windowed-ASR checkpoints. A window's
+    silences are relative to its extracted start (file offset + ext_start)."""
+    out: list[tuple[float, float]] = []
+    for f in sorted((run_dir / "asr").glob("*.json")):
+        try:
+            d = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        base = float(d.get("file_offset_s") or 0) + float(d.get("ext_start_s") or 0)
+        for iv in d.get("silences") or []:
+            try:
+                a, b = float(iv[0]), float(iv[1])
+            except (TypeError, ValueError, IndexError):
+                continue
+            if b > a:
+                out.append((base + a, base + b))
+    out.sort()
+    return out
+
+
+def silence_fraction(silences: list[tuple[float, float]], lo: float, hi: float) -> float:
+    """Fraction of [lo, hi] covered by measured silence (overlaps merged)."""
+    if hi <= lo or not silences:
+        return 0.0
+    covered, cur = 0.0, lo
+    for a, b in silences:
+        a, b = max(a, cur), min(b, hi)
+        if b > a:
+            covered += b - a
+            cur = b
+    return covered / (hi - lo)
+
+
+# A gap or tail at least this much measured silence is excused (tape leader,
+# blank run-out, a long pause in an MP3) — never an unmeasured stretch.
+SILENCE_EXCUSE_FRACTION = 0.8
 
 
 def parse_transcript(text: str) -> list[TranscriptLine]:
@@ -234,6 +277,7 @@ def load_run(
 ) -> RunInputs:
     run_dir = Path(run_dir)
     inp = RunInputs(run_dir=run_dir)
+    inp.silences = load_silences(run_dir)
 
     for path in sorted((run_dir / "summaries").glob("*.summary.md")):
         text = path.read_text(encoding="utf-8")
@@ -632,7 +676,8 @@ def check_p3(
             backwards += 1
         else:
             widest = max(widest, t - prev)
-            if t - prev > max_gap:
+            if t - prev > max_gap and silence_fraction(
+                    inp.silences, prev, t) < SILENCE_EXCUSE_FRACTION:
                 gaps.append(
                     {
                         "from": fmt_ts(prev),
@@ -642,10 +687,15 @@ def check_p3(
                 )
         prev = max(prev, t)
     tail = max(0.0, inp.duration - last)
-    covered = ratio >= coverage or tail <= tail_slack
+    # The last line's START is what we know; its speech runs on a few seconds.
+    tail_silent = (tail > tail_slack and silence_fraction(
+        inp.silences, last + tail_slack, inp.duration) >= SILENCE_EXCUSE_FRACTION)
+    covered = ratio >= coverage or tail <= tail_slack or tail_silent
     ok = covered and not gaps
     slack_note = (f" (tail {tail:.0f}s <= {tail_slack:.0f}s slack)"
-                  if ratio < coverage and tail <= tail_slack else "")
+                  if ratio < coverage and tail <= tail_slack else
+                  f" (tail {tail:.0f}s is measured silence)" if ratio < coverage and tail_silent
+                  else "")
     return _result(
         ok,
         f"last line {fmt_ts(last)} = {ratio:.3%} of {fmt_ts(inp.duration)}{slack_note}; "
