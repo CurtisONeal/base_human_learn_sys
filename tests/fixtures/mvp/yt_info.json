@@ -1,0 +1,35 @@
+{
+ "id": "reDRM0tqhNs",
+ "title": "Claude Certified Architect - Foundations – Prepare for and pass the exam!",
+ "fulltitle": "Claude Certified Architect - Foundations – Prepare for and pass the exam!",
+ "upload_date": "20260720",
+ "uploader": "freeCodeCamp.org",
+ "uploader_id": "@freecodecamp",
+ "channel": "freeCodeCamp.org",
+ "channel_id": "UC8butISFwT-Wl7EV0hUK0BQ",
+ "tags": [],
+ "categories": [
+  "Education"
+ ],
+ "live_status": "not_live",
+ "webpage_url": "https://www.youtube.com/watch?v=reDRM0tqhNs",
+ "original_url": "https://www.youtube.com/watch?v=reDRM0tqhNs",
+ "language": "en",
+ "extractor": "youtube",
+ "extractor_key": "Youtube",
+ "duration": 420,
+ "duration_string": "7:00",
+ "description": "The Claude Certified Architect – Foundations (CCA-F) is Anthropic’s official credential validating your ability to design and implement production-grade AI solutions using Claude. The exam evaluates practical architectural judgment across real-world enterprise scenarios rather than theoretical trivia.\n\nLearn how to pass the exam! Earn the certification. \n\nMore course resources: https://www.exampro.co/cca-f\n\n✏️ Course developed by @ExamProChannel \n\n❤️ Support for this channel comes from our friends at Scrimba – the coding platform that's reinvented interactive learning: https://scrimba.com/freecodecamp\n\n(MVP fixture: first 7 minutes only.)\n",
+ "chapters": null,
+ "subtitles": {},
+ "automatic_captions": {
+  "en-orig": [
+   {
+    "ext": "json3",
+    "url": "https://fixture.invalid/cca_slice.en.json3",
+    "name": "English (Original)"
+   }
+  ]
+ },
+ "_mvp_fixture": "trimmed from previous_run_results/20260906_claude_certified_architect_foundations_prepare_for_and_pass_the_exam_captions/yt_info.json; duration and chapters fitted to the 0-420s caption slice"
+}

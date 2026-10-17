@@ -1,0 +1,16 @@
+<!doctype html>
+<html><head><title>Understanding Vector Databases</title></head>
+<body>
+<article>
+<h1>Understanding Vector Databases</h1>
+<p>A vector database stores embeddings: lists of numbers that place similar
+items close together. Search becomes a nearest-neighbour query instead of a
+keyword match.</p>
+<h2>Indexes</h2>
+<p>Approximate indexes such as HNSW trade a little recall for a large speed-up.
+The index is built once and updated as vectors arrive.</p>
+<h2>When not to use one</h2>
+<p>If your data fits in memory and changes rarely, a flat array and a dot
+product are simpler and exact. Measure before adding infrastructure.</p>
+</article>
+</body></html>

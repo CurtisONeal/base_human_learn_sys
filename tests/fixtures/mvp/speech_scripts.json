@@ -1,0 +1,6 @@
+{
+ "talk_15s": "Welcome to this short lesson on resource groups. A resource group holds related cloud resources so you can manage them together. Finally, delete the group to remove every resource inside it.",
+ "timkoo_truncated": "This is a voice memo about the quarterly planning meeting. We agreed to ship the reporting feature first and review the budget next week.",
+ "cam_0001": "Good evening everyone and welcome to the meetup. Tonight our first talk covers vector databases.",
+ "cam_0002": "Vector databases store embeddings for similarity search. Thanks for coming, and see you next month."
+}

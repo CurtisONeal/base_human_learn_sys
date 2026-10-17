@@ -288,11 +288,14 @@ def extract(path: Path) -> SourceText:
             # NB: not named `pages` — that is the list of page TEXTS in this
             # scope, and shadowing it turns pages[p-1] into a string index.
             page_ref = f"p. {first}" if first == last else f"pp. {first}–{last}"
+            # NB: not named `title` either — that is the DOCUMENT title read
+            # above; reusing it here renamed every bookmarked PDF after its
+            # last section ("Results", "Index", …).
             leaf = (trails[idx][-1] if trails[idx] else "").strip()
-            title = leaf[:44].rstrip() + ("…" if len(leaf) > 44 else "")
+            short = leaf[:44].rstrip() + ("…" if len(leaf) > 44 else "")
             sections.append(Section(
                 path=trails[idx],
-                locator=f"{page_ref} §{title}" if title else page_ref,
+                locator=f"{page_ref} §{short}" if short else page_ref,
                 text=body,
                 word_count=len(body.split()),
                 href=f"page={first}",

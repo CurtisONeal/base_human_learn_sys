@@ -146,3 +146,7 @@ audio_archive/
 audio_archive/*
 model_cache/
 .claude/worktrees/
+
+# WP-M1b: tiny synthetic integration fixtures are committed (see tests/fixtures/mvp/README.md)
+!tests/fixtures/mvp/*.m4a
+!tests/fixtures/mvp/*.aac

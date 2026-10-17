@@ -13,6 +13,31 @@ Newest first. Format: symptom → cause → fix → how we know.
 
 ---
 
+### Every bookmarked PDF was titled after its last bookmark (WP-M1b)
+- **Symptom:** `tiny_paper.pdf`, with metadata title "Chunk Size and Retrieval" and
+  bookmarks Introduction/Method/Results, came out titled "Results". That wrong title
+  appeared in the notes header, the `book` output and the catalog, so `catalog toc
+  "Chunk Size"` found nothing. The bug has been present since ac21eec on `main`.
+- **Cause:** in `documents/pdf.extract` the per-section loop assigned the truncated
+  heading to `title`, the same variable that held the document title read just above.
+- **Fix:** the loop variable is renamed. Existing catalog DBs keep the wrong titles
+  until `catalog index --force`.
+- **How we know:** `tests/test_documents.py::test_bookmarked_pdf_keeps_its_own_title`
+  fails on the old code. `test_integration_mvp.py::test_catalog_index_and_browse`
+  also covers it.
+
+### P3 was unpassable for short media (WP-M1b)
+- **Symptom:** a 15 s clip passed the ASR completeness gate but failed P3 at 66 %.
+  Real parakeet on `talk_15s.m4a` puts its last cue at 0:00:07 of 0:00:15.
+- **Cause:** P3 needs the last line's *start* ≥ 98 % of the duration. Lines carry
+  start times only, so a final cue or trailing room tone always starts seconds before
+  the end. That is harmless at 12 h and fatal at 15 s. WP-M2 is what put short
+  sources on the evaluated long-form path.
+- **Fix:** P3 also passes when the tail (duration − last start) is ≤ 30 s. That only
+  changes the outcome below 25 min, and internal gaps are still checked.
+- **How we know:** `tests/test_eval_longform.py::test_p3_short_clip_tail_slack`, plus
+  every media run in `tests/test_integration_mvp.py` (scripted and real parakeet).
+
 ### An evaluation that ran on nothing (T3 harness, WP-M3)
 - **Symptom:** the managing agent evaluated the Karpathy run with a glob
   `*let_s_build_gpt*`; the folder is `…_lets_build_gpt_…`, the glob matched

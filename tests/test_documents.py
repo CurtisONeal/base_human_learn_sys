@@ -380,6 +380,29 @@ def test_non_monotonic_outline_does_not_swallow_the_book(tmp_path):
     assert any(s.locator.startswith(("p. 4", "pp. 4")) for s in sections)
 
 
+def test_bookmarked_pdf_keeps_its_own_title(tmp_path):
+    """The section loop reused `title`, so every bookmarked PDF was renamed
+    after its LAST bookmark — the notes header, `book` output and the catalog
+    all showed "Results" for a paper titled "Chunk Size and Retrieval"."""
+    pymupdf = pytest.importorskip("pymupdf")
+    from video2mdnotes.core.documents.pdf import extract as extract_pdf
+    book = _make_pdf(tmp_path, [f"content of page {i}" for i in range(1, 4)],
+                     toc=[[1, "Introduction", 1], [1, "Method", 2], [1, "Results", 3]])
+    doc = pymupdf.open(book)
+    doc.set_metadata({"title": "Chunk Size and Retrieval"})
+    doc.saveIncr()
+    doc.close()
+    source = extract_pdf(book)
+    assert source.title == "Chunk Size and Retrieval"
+    assert [s.locator for s in source.sections] == [
+        "p. 1 §Introduction", "p. 2 §Method", "p. 3 §Results"]
+    # no metadata title: the file name, never a section heading
+    (tmp_path / "plain").mkdir()
+    plain = _make_pdf(tmp_path / "plain", [f"content of page {i}" for i in range(1, 3)],
+                      toc=[[1, "Only Chapter", 1]])
+    assert extract_pdf(plain).title == "book"
+
+
 def test_pdf_sections_are_emitted_in_page_order(tmp_path):
     from video2mdnotes.core.documents.pdf import extract as extract_pdf
     book = _make_pdf(
