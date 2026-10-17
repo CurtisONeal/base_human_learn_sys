@@ -412,3 +412,11 @@ def test_process_playlist_prints_one_run_dir_per_video(tmp_path, monkeypatch):
     assert tail == [f"RUN_DIR={d}" for d in expected]
     last = json.loads(settings.last_run_file.read_text())
     assert last["run_dir"] == expected[-1] and [r["status"] for r in last["runs"]] == ["ok", "ok"]
+
+
+def test_range_end_never_rounds_past_the_media_duration():
+    """T5b: duration 3885.84 s rendered the last range as `…–1:04:46`, past
+    the duration, and P2 failed on it."""
+    from video2mdnotes.core.structure import fmt_hms, time_locator
+    assert time_locator(3755.0, 3885.84) == "1:02:35–1:04:45"
+    assert fmt_hms(59.99) == "0:00:59"

@@ -163,7 +163,11 @@ class StructureResult(BaseModel):
 
 
 def fmt_hms(seconds: Optional[float]) -> str:
-    return format_duration(max(0.0, seconds or 0.0))
+    """H:MM:SS, truncated (not rounded): a range ending at a 3885.84 s media
+    end reads 1:04:45, never 1:04:46 — past the duration, which the
+    evaluator's P2 rejects (T5b). Starts truncate like every citation."""
+    s = int(max(0.0, seconds or 0.0))
+    return f"{s // 3600:d}:{(s % 3600) // 60:02d}:{s % 60:02d}"
 
 
 def time_locator(start_s: float, end_s: float) -> str:
