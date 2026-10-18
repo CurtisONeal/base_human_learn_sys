@@ -71,6 +71,12 @@ deliberately.
       (sometimes) citations. Seen on Azure Master Class Part 1 (22 chapters → 1) and the
       ClePy FastAPI recording (0 citations). Fix before merge.
 
+- [ ] **Learning packages (decided 2026-10-17, `design/LEARNING_PACKAGES.md`).** Notes go into
+      `010_learning_system/by_subject/<subject>/<source>/` with extracted text, images and working
+      relative citation links; binaries in `__sources/` (excluded from Obsidian Sync — set that once).
+- [ ] **Main-machine layout:** corpus + catalog DB on the 20 TB drive, GTD and vault on the same
+      machine; replicate corpus + DB (second drive or cloud, checksum-verified); code on GitHub.
+
 ## Decisions I keep re-making
 
 - **Both formats are worth keeping.** 11 titles exist as EPUB *and* PDF. The
