@@ -153,6 +153,23 @@ def _add_visuals(project_dir: Path, source, summary_path: Path) -> None:
 
 
 _DOC_STATUS = {"done": "ok", "skipped": "skipped", "failed": "failed", "stop": "stopped"}
+PACKAGE_HELP = ("Also build a learning package in the Obsidian vault for this subject "
+                "(see `package`; OBSIDIAN_VAULT / LEARNING_ROOT)")
+
+
+def _package_after(target: Path, subject: str | None, source: Path | None = None) -> None:
+    """`--package <subject>`: package a finished run. Never fails the run itself —
+    the notes already exist; a packaging problem is reported and left to
+    `package` to retry. Deterministic, no model calls."""
+    if not subject:
+        return
+    from video2mdnotes.core.package import PackageError, package as build_package
+    try:
+        result = build_package(target, subject, source=source)
+    except (PackageError, FileNotFoundError, ValueError, OSError) as exc:
+        console.print(f"[yellow]Package not built:[/yellow] {exc}")
+        return
+    console.print(f"[green]Package:[/green] {result.summary()}", highlight=False)
 
 
 def _project_root(source, base: Path | None = None) -> Path:
@@ -294,6 +311,7 @@ def longform(
         True, "--pack/--no-pack",
         help="Pack consecutive short chapters into one passage call (default on; "
              "each chapter keeps its own section)"),
+    package_subject: str = typer.Option(None, "--package", help=PACKAGE_HELP),
 ):
     """Long-form notes for an EXISTING run dir — no download, no transcription.
 
@@ -356,6 +374,7 @@ def longform(
         report.emit(status)
         raise typer.Exit(code)
     console.print(f"[green]Notes:[/green] {result.summary_path}")
+    _package_after(Path(result.summary_path), package_subject)
     console.print(f"Model calls: {result.model_calls} ({result.outline_calls} outline + "
                   f"{result.passages_run} passage + {result.course_map_calls} course map + "
                   f"{result.consistency_calls} consistency); "
@@ -390,6 +409,7 @@ def media(
         help="Long-recording engine: auto | parakeet-mlx | faster-whisper[:model] (default ASR_BACKEND)",
     ),
     usd_cap: float = typer.Option(None, "--usd-cap", help=USD_CAP_HELP),
+    package_subject: str = typer.Option(None, "--package", help=PACKAGE_HELP),
 ):
     """Transcribe and summarize local audio or video. No network access.
 
@@ -603,6 +623,8 @@ def media(
         console.print(f"      [green]Notes:[/green] {summary_path}")
         report.add(project_dir, "ok")
         done += 1
+        if NO_SUMMARY_PREFIX not in summary_path.name:
+            _package_after(summary_path, package_subject)
 
     console.print(f"\n[bold]Media:[/bold] {done} done · {skipped} skipped · {failed} failed")
     report.emit()
@@ -916,6 +938,7 @@ def book(
     usd_cap: float = typer.Option(None, "--usd-cap", help=USD_CAP_HELP),
     out: Path = typer.Option(
         None, "--out", help="Notes directory (default: OUTPUT_DIR/books)"),
+    package_subject: str = typer.Option(None, "--package", help=PACKAGE_HELP),
 ):
     """Summarize an owned book or paper, preserving chapter/page locators.
 
@@ -964,6 +987,9 @@ def book(
         outcome = _summarize_and_write_document(
             source, out_root, label, force, extract_only, max_words
         )
+        if outcome in ("done", "skipped") and source_file.suffix.lower() in (".pdf", ".epub"):
+            _package_after(out_root / f"{source.source_id}.summary.md", package_subject,
+                           source=source_file)
         if outcome == "done":
             done += 1
         elif outcome == "skipped":
@@ -1018,6 +1044,7 @@ def process(
         None, "--out",
         help="Run dir for a single video; output root when the URL is a playlist "
              "(each video gets <out>/<YYYYMMDD>_<title>). Default: OUTPUT_DIR."),
+    package_subject: str = typer.Option(None, "--package", help=PACKAGE_HELP),
 ):
     """
     Downloads, transcribes, and summarizes a video or playlist from a URL.
@@ -1068,6 +1095,13 @@ def process(
         outcome = _summarize_and_write_document(
             source, doc_root, "[1/1]", force, False, None,
         )
+        if outcome in ("done", "skipped") and package_subject:
+            if local_path.suffix.lower() in (".pdf", ".epub"):
+                _package_after(doc_root / f"{source.source_id}.summary.md", package_subject,
+                               source=local_path)
+            else:
+                console.print("[yellow]Package not built:[/yellow] only .pdf/.epub documents "
+                              "(and video/media runs) are packaged")
         report.add(doc_root, _DOC_STATUS.get(outcome, "failed"))
         report.emit()
         raise typer.Exit(0 if outcome in ("done", "skipped") else 1)
@@ -1375,10 +1409,58 @@ def process(
         title="Run Summary" if not stopped_at else "Run Stopped",
         border_style="green" if not (failed or stopped_at) else "yellow",
     ))
+    if package_subject:
+        for run in report.runs:
+            if run["status"] in ("ok", "skipped") and Path(run["run_dir"]).is_dir():
+                _package_after(Path(run["run_dir"]), package_subject)
     report.emit("stopped" if stopped_at else None)
 
     if stopped_at or failed:
         raise typer.Exit(code=1)
+
+@app.command("package")
+def package_cmd(
+    target: Path = typer.Argument(..., help="Run dir (summaries/*.summary.md + source_meta.json) or a notes file"),
+    subject: str = typer.Option(..., "--subject", help="Subject folder, e.g. azure_identity"),
+    source: Path = typer.Option(None, "--source", help="The original .pdf/.epub the notes cite (documents)"),
+    vault: Path = typer.Option(None, "--vault", help="Obsidian vault root (default OBSIDIAN_VAULT)"),
+    slug: str = typer.Option(None, "--slug", help="Package folder name (default: from the title)"),
+    force: bool = typer.Option(False, "--force", help="Overwrite a notes.md that was edited in the vault"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Report what would be written; write nothing"),
+):
+    """Build a learning package: notes with working citation links, inside the vault.
+
+        package previous_run_results/books/<book>.summary.md --subject azure_identity --source ~/Documents/corpus/<book>.pdf
+        package previous_run_results/<youtube_run> --subject azure_identity
+        package previous_run_results/<local_media_run> --subject community_events --dry-run
+
+    Deterministic post-processing — no model calls, no network. Re-running is
+    safe: unchanged files are not rewritten, and a notes.md edited in the vault
+    is kept unless --force. Unresolvable citations stay as text and are listed
+    in package_report.json.
+    """
+    from video2mdnotes.core.package import PackageError, package as build_package
+
+    try:
+        result = build_package(target, subject, source=source, vault=vault,
+                               dry_run=dry_run, force=force, slug=slug)
+    except (PackageError, FileNotFoundError, ValueError) as exc:
+        console.print(f"[red]{type(exc).__name__}:[/red] {exc}")
+        raise typer.Exit(2)
+    r = result.report
+    console.print(("[yellow]DRY RUN[/yellow] " if dry_run else "") + result.summary(), highlight=False)
+    if dry_run:
+        console.print(f"Would generate {len(result.written)} file(s) besides notes.md "
+                      f"({r['notes_status']})", highlight=False)
+    else:
+        console.print(f"{len(result.written)} file(s) changed · broken links: "
+                      f"{len(r.get('broken_links', []))}", highlight=False)
+    for u in r["citations"]["unresolved"][:10]:
+        console.print(f"  unresolved line {u['line']}: [{u['citation']}]",
+                      highlight=False, markup=False)
+    if r.get("broken_links"):
+        raise typer.Exit(1)
+
 
 # Registering a second command (`book`) made typer require a subcommand, which
 # would have silently broken every existing invocation — the readme, the
@@ -1386,7 +1468,7 @@ def process(
 # `python -m video2mdnotes.main <url>` with no verb. Rather than change a
 # published interface as a side effect of adding a feature, an unrecognised
 # first argument is treated as a URL for `process`, exactly as before.
-_COMMANDS = {"process", "book", "catalog", "media", "longform"}
+_COMMANDS = {"process", "book", "catalog", "media", "longform", "package"}
 
 
 def _with_default_command(argv: list[str]) -> list[str]:

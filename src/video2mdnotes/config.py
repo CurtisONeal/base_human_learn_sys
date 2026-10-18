@@ -340,6 +340,11 @@ class Settings(BaseSettings):
     output_dir: Path = BASE_DIR / "previous_run_results"
     # Where every command records its last run (WP-M3); None = output_dir/_last_run.json.
     last_run_file: Path | None = None
+    # Learning packages (core/package.py, `package` / `--package <subject>`):
+    # <obsidian_vault>/<learning_root>/<subject>/<slug>/ holds notes + text +
+    # images; source binaries go to <obsidian_vault>/__sources/<subject>/<slug>/.
+    obsidian_vault: Path = Path("/Users/s_admin/Documents/obsidian_vault/syncing_vault2_clean_2026")
+    learning_root: str = "010_learning_system/by_subject"
     temp_dir: Path = BASE_DIR / "temp_files"
     prompt_file: Path = BASE_DIR / "summarize_prompt.txt"
 
