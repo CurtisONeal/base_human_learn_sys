@@ -10,7 +10,7 @@
 - Tony/Ireland cassette file: NOT found on /Volumes/Expansion (only 2 2012 WAVs + 5 Timkoo AACs). Waiting
   for the user to give a name fragment / drive. Never touch /Volumes originals without a safety copy.
 
-## In flight
+## In flight (WP-L1 merged 2026-10-17; privacy fix d4a5c2b)
 - **WP-L1 learning packages** agent (branch `worktree-agent-a53afb0033a44fba2`): `package` command +
   `--package <subject>`; extracted text/ anchors, PDF page links into `<vault>/__sources/`, images/,
   YouTube ?t= links, transcript block links; packages CCA-F guide, SC-900 (azure_identity), Azure Pt 2,
