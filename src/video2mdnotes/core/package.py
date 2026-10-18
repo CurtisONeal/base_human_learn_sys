@@ -147,6 +147,18 @@ def _escape_md_line(line: str) -> str:
     return line
 
 
+_BULLET_GLYPH = "-\u2022\u25a0\u25aa\u25cf\u25e6"
+_LONE_BULLETS = re.compile(
+    rf"(?m)^[{_BULLET_GLYPH}][\u200b \t]*(?:\n[{_BULLET_GLYPH}][\u200b \t]*)*\n(?=\S)")
+
+
+def join_pdf_bullets(text: str) -> str:
+    """PDF bullets often arrive as a lone glyph on its own line ("-" plus a
+    zero-width space; Exam Ref books print two "\u25a0" lines per bullet).
+    Rejoin them with the item text as a markdown list item."""
+    return _LONE_BULLETS.sub("- ", text)
+
+
 _FENCE = re.compile(r"^\s*(```|~~~)")
 
 
@@ -328,9 +340,7 @@ def _build_pdf(path: Path, text_dir: Path, pdf_target: Path) -> DocModel:
             return f"*[p. {pno}]({href})*"
 
         def add_text(h: Heading, pno: int, lines: List[str]) -> None:
-            # PDF bullets often arrive as a lone "-" (plus a zero-width space)
-            # on its own line; rejoin them so they render as list items.
-            joined = re.sub(r"(?m)^([-•▪●◦])[\u200b \t]*\n(?=\S)", r"\1 ", "\n".join(lines))
+            joined = join_pdf_bullets("\n".join(lines))
             body = _escape_text(joined)
             if not body:
                 return
@@ -341,6 +351,7 @@ def _build_pdf(path: Path, text_dir: Path, pdf_target: Path) -> DocModel:
 
         for pno in range(1, len(pages) + 1):
             lines = pages[pno - 1].splitlines()
+            original = list(lines)
             cuts: List[Tuple[int, Heading]] = []
             cursor = 0
             for i in starts.get(pno, []):
@@ -358,6 +369,17 @@ def _build_pdf(path: Path, text_dir: Path, pdf_target: Path) -> DocModel:
                 cursor = at + (1 if found is not None else 0)
                 if found is not None:
                     lines[found] = "\x00"     # the heading line itself is the heading
+                    # A long title wraps onto following lines: consume those too.
+                    combined = _norm_title(original[found])
+                    nxt = found + 1
+                    while nxt < len(lines) and combined != want:
+                        joined = _norm_title(" ".join(original[found:nxt + 1]))
+                        if not joined or not want.startswith(joined):
+                            break
+                        lines[nxt] = "\x00"
+                        combined = joined
+                        nxt += 1
+                    cursor = nxt
             prev_end = 0
             holder = current or front
             for at, h in cuts:

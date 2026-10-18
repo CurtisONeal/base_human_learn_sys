@@ -461,3 +461,29 @@ def test_book_package_option_packages_existing_notes(tmp_path, tiny_pdf, monkeyp
     assert "Package:" in result.output
     assert (tmp_path / "vault/010_learning_system/by_subject/vectors/tiny_vector_paper/notes.md").exists()
     assert result.output.strip().splitlines()[-1].startswith("RUN_DIR=")
+
+
+def test_pdf_wrapped_bookmark_title_is_not_left_in_the_text(tmp_path):
+    path = tmp_path / "wrap.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), "Skill 2.4: Describe the identity protection and", fontsize=14)
+    page.insert_text((72, 92), "governance capabilities of Entra", fontsize=14)
+    page.insert_text((72, 130), "This objective covers advanced features.", fontsize=11)
+    doc.set_toc([[1, "Skill 2.4: Describe the identity protection and governance capabilities of Entra", 1]])
+    doc.save(path)
+    notes = _write(tmp_path / "w.summary.md", "# Wrap: Notes\n\n## A\n\n- Claim [p. 1 §Skill 2.4].\n")
+    res = pk.package(notes, "wrap", source=path, vault=tmp_path / "vault")
+    text = next((res.package_dir / "text").glob("*.md")).read_text()
+    body = text.split("\n", 3)[-1]
+    assert "governance capabilities" not in body.split("\n", 2)[-1]
+    assert "This objective covers advanced features." in body
+    assert res.report["citations"]["unresolved"] == []          # label prefix resolves
+    _assert_every_link_lands(res.package_dir)
+
+
+
+def test_pdf_bullet_glyph_lines_become_list_items():
+    raw = "Capabilities\n\u25a0\n\u25a0\nContinuous discovery\n-\u200b\nPrioritization\n- already fine"
+    assert pk.join_pdf_bullets(raw) == (
+        "Capabilities\n- Continuous discovery\n- Prioritization\n- already fine")

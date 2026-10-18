@@ -1450,7 +1450,7 @@ def package_cmd(
     r = result.report
     console.print(("[yellow]DRY RUN[/yellow] " if dry_run else "") + result.summary(), highlight=False)
     if dry_run:
-        console.print(f"Would write {len(result.written)} generated file(s) + notes.md "
+        console.print(f"Would generate {len(result.written)} file(s) besides notes.md "
                       f"({r['notes_status']})", highlight=False)
     else:
         console.print(f"{len(result.written)} file(s) changed · broken links: "
