@@ -970,6 +970,44 @@ def block_id(seconds: float) -> str:
     return f"t{s // 3600}-{(s % 3600) // 60:02d}-{s % 60:02d}"
 
 
+# Private individuals in a recording (raffle/giveaway winners, attendees called
+# out by name) are withheld from the notes by the passage prompt, but the raw
+# transcript copied into a package would still name them — and the package
+# syncs to every device. E3e: "...that person is Greg Van Lundran." followed by
+# "Senior Business Analyst at Clear result." Redact deterministically and log.
+_PRIVATE_CONTEXT = re.compile(
+    r"\b(winner|picked at random|that person is|won the|congratulations to|drawn? (?:for|from))\b", re.I)
+_NAME_RUN = re.compile(r"\b(?:[A-Z][a-z'\-]+)(?:\s+(?:[A-Z][a-z'\-]+|van|de|del|der|von|la|le)){1,3}\b")
+_ROLE_AT_ORG = re.compile(r"^\s*(?:a\s+|an\s+|the\s+)?[A-Z][\w &/-]{2,60}\s+at\s+[\w&.' -]{2,40}\.?\s*$")
+NAME_WITHHELD = "[attendee name withheld]"
+ROLE_WITHHELD = "[attendee job title and employer withheld]."
+
+
+def redact_private_mentions(text: str) -> Tuple[str, List[dict]]:
+    """Withhold names (and an immediately following "<role> at <org>" line)
+    where the transcript announces a winner or calls out an attendee."""
+    lines = text.split("\n")
+    log: List[dict] = []
+    for i, line in enumerate(lines):
+        m = _TLINE.match(line)
+        if not m or not _PRIVATE_CONTEXT.search(line):
+            continue
+        cut = _PRIVATE_CONTEXT.search(line).end()
+        tail = line[cut:]
+        new_tail, n = _NAME_RUN.subn(NAME_WITHHELD, tail)
+        if n:
+            lines[i] = line[:cut] + new_tail
+            log.append({"rule": "private:name", "ts": m.group("ts"), "count": n})
+            if i + 1 < len(lines):
+                nm = _TLINE.match(lines[i + 1])
+                if nm:
+                    rest = lines[i + 1][len(nm.group(1)) + len(nm.group("ts")) + 1:]
+                    if _ROLE_AT_ORG.match(rest.split("^")[0]):
+                        lines[i + 1] = f"{nm.group(1)}{nm.group('ts')}] {ROLE_WITHHELD}"
+                        log.append({"rule": "private:role_at_org", "ts": nm.group("ts")})
+    return "\n".join(lines), log
+
+
 def transcript_with_block_ids(text: str) -> Tuple[str, List[Tuple[float, str]]]:
     """Append ``^tH-MM-SS`` to the first transcript line of each second."""
     out, ids, seen = [], [], set()
@@ -1223,7 +1261,8 @@ def package(
             transcripts = sorted(p for p in (run_dir / "transcripts").glob("*.md")
                                  if not p.name.endswith(".corrected.md")) if run_dir else []
             if transcripts:
-                text, ids = transcript_with_block_ids(transcripts[0].read_text(encoding="utf-8"))
+                text, private_log = redact_private_mentions(transcripts[0].read_text(encoding="utf-8"))
+                text, ids = transcript_with_block_ids(text)
                 files[TRANSCRIPT_FILENAME] = text.encode("utf-8")
                 transcript_target = pkg_dir / TRANSCRIPT_FILENAME
                 meta["transcript_source"] = str(transcripts[0].resolve())

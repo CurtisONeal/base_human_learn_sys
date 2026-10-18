@@ -487,3 +487,20 @@ def test_pdf_bullet_glyph_lines_become_list_items():
     raw = "Capabilities\n\u25a0\n\u25a0\nContinuous discovery\n-\u200b\nPrioritization\n- already fine"
     assert pk.join_pdf_bullets(raw) == (
         "Capabilities\n- Continuous discovery\n- Prioritization\n- already fine")
+
+
+def test_raffle_winner_is_redacted_in_packaged_transcript():
+    """E3e: the raw meetup transcript named the raffle winner and employer;
+    the package syncs to every device, so the copy withholds them."""
+    from video2mdnotes.core.package import redact_private_mentions, NAME_WITHHELD
+
+    raw = ("- [1:12:21.640] I'll go ahead and announce the uh the winner from the submission.\n"
+           "- [1:12:26.119] Um contact was picked at random from the one hundred and twelve "
+           "submissions, and that person is Greg Van Lundran.\n"
+           "- [1:12:35.239] Senior Business Analyst at Clear result.\n"
+           "- [1:12:57.520] And I would now like to uh bring Chris Halasey on the stage.")
+    out, log = redact_private_mentions(raw)
+    assert "Greg" not in out and "Lundran" not in out and "Clear result" not in out
+    assert NAME_WITHHELD in out
+    assert "Chris Halasey" in out          # speakers introduced on stage are not private
+    assert {e["rule"] for e in log} == {"private:name", "private:role_at_org"}
