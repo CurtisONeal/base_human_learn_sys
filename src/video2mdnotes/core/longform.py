@@ -2351,6 +2351,9 @@ def run_longform(
             f"notes lint left {len(residual)} residual mishearing(s) after fixing: "
             + "; ".join(f"line {r['line']}: {r['found']}" for r in residual[:5]))
 
+    # WP-D1: never leave notes with an unclosed code fence (deterministic).
+    from video2mdnotes.core.fences import repair_fences
+    fixed, fence_repairs = repair_fences(fixed, label=summary_name)
     summary_path = plan.out_dir / "summaries" / summary_name
     _atomic_write(summary_path, fixed)
     with state.lock:
@@ -2364,6 +2367,7 @@ def run_longform(
             "consistency": {"status": cons.status, "applied": sum(
                 1 for e in cons.log if e.get("applied")), "reason": cons.reason},
             "check_rule_findings": check_rule_findings(fixed),
+            "fence_repairs": fence_repairs,
         }
         state.save()
     progress(f"Long-form notes: {summary_path} ({len(fixed.split()):,} words; "

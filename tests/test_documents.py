@@ -506,7 +506,9 @@ def test_reduce_failure_still_yields_the_passage_notes(monkeypatch):
             Section(path=["2. Two"], locator="ch. 2", text="beta " * 50, word_count=50),
         ],
     )
-    result = summarizer.summarize_document(source)
+    # max_words=60: two passages (the whole document no longer fits one), so
+    # there IS a reduce to fail (WP-D1 sends a sub-budget document in one call).
+    result = summarizer.summarize_document(source, max_words=60)
     assert "notes for passage 1" in result.summary_text
     assert "notes for passage 2" in result.summary_text
     assert "timed out" in result.summary_text
@@ -524,10 +526,11 @@ def test_exhaustion_during_reduce_is_not_swallowed(monkeypatch):
     monkeypatch.setattr(summarizer, "complete_with_failover", _fake)
     source = SourceText(
         source_id="b", title="B", kind="document", origin="/b.epub",
-        sections=[Section(path=["1. One"], locator="ch. 1", text="x " * 50, word_count=50)],
+        sections=[Section(path=["1. One"], locator="ch. 1", text="x " * 50, word_count=50),
+                  Section(path=["2. Two"], locator="ch. 2", text="y " * 50, word_count=50)],
     )
     with pytest.raises(summarizer.SubscriptionExhausted):
-        summarizer.summarize_document(source)
+        summarizer.summarize_document(source, max_words=60)
 
 
 def test_conversational_reduce_output_is_rejected(monkeypatch):
@@ -551,7 +554,7 @@ def test_conversational_reduce_output_is_rejected(monkeypatch):
         sections=[Section(path=[f"{i}. Ch"], locator=f"ch. {i}",
                           text="x " * 100, word_count=100) for i in range(1, 4)],
     )
-    result = summarizer.summarize_document(source)
+    result = summarizer.summarize_document(source, max_words=150)
     assert "Do you want me to" not in result.summary_text
     assert "real passage notes" in result.summary_text
 

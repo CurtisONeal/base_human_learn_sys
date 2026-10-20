@@ -542,7 +542,40 @@ CODE — this matters most:
 - If a block is longer than about 40 lines, copy the part the passage's own
   discussion refers to and mark the omission explicitly.
 - Never invent an identifier, import, flag or API name that is not in the passage.
+- Close every ``` fence you open.
+
+KEY TERMS (WP-D1):
+- Do not write an overview or a title: the whole-book notes get one of each.
+- End with a `#### Key terms` heading and one line per term this passage
+  defines: `- **Term**: definition [locator]`. Each term once.
 """
+
+# A document that fits one passage is read in ONE call (WP-D1): the same
+# locator and code rules as a passage, plus the whole-document structure the
+# reduce used to impose. Built from _CHUNK_SYSTEM so the two cannot drift.
+_WHOLE_SYSTEM = (
+    _CHUNK_SYSTEM
+    .replace("You are summarizing ONE PASSAGE of a longer book.",
+             "You are writing study notes for ONE COMPLETE DOCUMENT (a book, paper,\n"
+             "article or note). You are given all of it.")
+    .replace("- Summarize only what this passage says. Do not infer what the rest of the book covers.",
+             "- Summarize only what the document says. Add nothing that is not in it.")
+    .split("KEY TERMS (WP-D1):")[0]
+    + """STRUCTURE:
+- First line: `# <document title>`.
+- `## Overview`: one to three paragraphs — what the document is, who it is
+  for, what it covers, its main argument.
+- Then the main topics as `##` headings (subtopics `###`) in the document's
+  own order. Each topic appears ONCE: gather everything the document says
+  about it under one heading.
+- Last: `## Key terms`, one line per term — `- **Term**: definition [locator]`.
+  Each term once.
+- Output ONLY the notes document. No preamble, no commentary, no questions or
+  offers of further work. The first line of your reply is the title line.
+- Be comprehensive. These notes replace the document for a reader who cannot
+  open it, so do not compress away detail to be concise.
+"""
+)
 
 # Passages combined per reduce call. Six keeps each call small enough to finish
 # inside the CLI timeout; a 16-passage reduce timed out at 900s and lost the
@@ -555,17 +588,37 @@ Rules:
 - Work only from the notes given. Add nothing that is not in them.
 - Keep the locators. A reader must be able to find every claim in the book.
 - Merge duplicates; preserve disagreements rather than resolving them silently.
-- Structure: overview, then the main topics in the book's own order, then key terms.
+- Structure: the main topics in the book's own order, as `##` headings
+  (subtopics `###`). Each topic appears ONCE — gather what several passages
+  say about it under one heading.
+- Do NOT write a title, an overview or a key-terms section. Those are built
+  once for the whole book, separately; a per-batch overview is what gave one
+  document four of them.
 - CODE BLOCKS PASS THROUGH VERBATIM. Copy every ``` fenced block from the notes
   into your output unchanged. Never summarize a code block into a sentence, and
   never drop one because a nearby passage covers the same topic — the reduce is
-  where code silently disappears.
+  where code silently disappears. Close every fence you open.
 - Output ONLY the notes document. No preamble, no commentary on the input, no
   checklist of what you did, and no questions or offers of further work. The
   first line of your reply is the first line of the document.
 - Be comprehensive. These notes replace the book for a reader who cannot open
   it, so do not compress away detail to be concise.
 """
+
+# One Overview for the whole document, written once over the assembled topic
+# notes (or their outline when those are long). Small input, small output.
+_OVERVIEW_SYSTEM = """You are writing the Overview section of study notes for one document.
+
+Rules:
+- Work only from the notes given. Add nothing that is not in them.
+- One to three paragraphs: what the document is, who it is for, what it
+  covers in order, and its main argument.
+- Keep a bracketed locator on any specific claim, copied from the notes.
+- Output ONLY the paragraphs: no heading, no preamble, no questions.
+"""
+
+# Notes this large go to the overview call as an outline instead.
+_OVERVIEW_FULL_WORDS = 12_000
 
 
 # A conversational opener ("I'll assemble these notes into…") is harmless when
@@ -616,27 +669,93 @@ def _reduce_collapsed(final: str, passage_notes: list) -> bool:
     return bool(_CHAT_OFFER.search(final)) and final_words < source_words * 0.35
 
 
+def _drop_title_line(text: str) -> str:
+    """A batch's own `# Title` line: the document has one title, at the top."""
+    lines = text.strip().split("\n")
+    if lines and re.match(r"^#[ \t]+\S", lines[0]):
+        lines = lines[1:]
+    return "\n".join(lines).strip()
+
+
+def _write_overview(title: str, topics: str) -> tuple[str, str | None, str | None]:
+    """(overview text, model or None, failure reason or None).
+
+    Falls back to a deterministic list of the topic headings — never to a
+    second reduce, and never to nothing.
+    """
+    from video2mdnotes.core import docnotes
+
+    body = topics if len(topics.split()) <= _OVERVIEW_FULL_WORDS else docnotes.outline(topics)
+    reason = None
+    try:
+        output, model = complete_with_failover(
+            _OVERVIEW_SYSTEM, f"Document: {title}\n\n{body}")
+        output = _strip_chat_preamble(output)
+        output = "\n".join(line for line in output.split("\n")
+                           if not re.match(r"^#{1,6}[ \t]+overview\b", line, re.I)).strip()
+        if len(output.split()) >= 25 and not _CHAT_OFFER.search(output):
+            return output, model, None
+        reason = f"overview call returned {len(output.split())} unusable words"
+    except (SubscriptionExhausted, BudgetExhausted):
+        raise
+    except Exception as exc:  # noqa: BLE001 - the topics are the expensive part
+        reason = f"overview call failed: {str(exc)[:160]}"
+    heads = docnotes.topic_headings(topics)
+    listed = "; ".join(_BRACKETS.sub("", h).strip() for h in heads) or "see the topics below"
+    return f"These notes cover, in order: {listed}.", None, reason
+
+
+_BRACKETS = re.compile(r"\s*\[[^\]]*\]")
+
+
+def _finish_notes(text: str, label: str, extra_terms=()) -> tuple[str, dict]:
+    """One Overview, one merged Key terms, balanced code fences. Deterministic."""
+    from video2mdnotes.core import docnotes, fences
+
+    done = docnotes.consolidate(text, extra_terms)
+    fixed, repairs = fences.repair_fences(done.text, label=label)
+    info = {
+        "overviews": max(done.overviews_found - done.overviews_dropped, 0),
+        "overviews_dropped": done.overviews_dropped,
+        "key_terms_in": done.terms_in, "key_terms_out": done.terms_out,
+        "key_term_lists_merged": done.term_sections,
+        "fence_repairs": repairs,
+    }
+    return fixed, info
+
+
 def summarize_document(source, max_words: int = None, progress=None) -> SummaryResult:
-    """Summarize a book-length `SourceText` by map-reduce over its chunks.
+    """Summarize a `SourceText` (book, paper, article, note).
 
-    Chunks are summarized independently and then reduced, because no useful
-    model reads 136,000 words in one request. Two properties are load-bearing:
+    WP-D1 shape:
 
-    * **Locators survive the reduce.** Each chunk carries exactly one chapter
-      or page reference, so a claim in the final notes can be traced to a place
-      in the book. A summary of a book you cannot check is worth very little.
-    * **Exhaustion stops the whole document, not one chunk.** A book that is
-      half summarized because the subscription ran out mid-way would look
-      complete while silently omitting later chapters. The exception propagates
-      so the caller can wait and resume.
+    * **Fits the budget → ONE call** over the whole document, every section
+      locator intact, no reduce. T8 had cut an 8,956-word note into 22
+      passages and concatenated four reduce batches: four `## Overview`s,
+      three `## Key terms`, topics split at seams.
+    * **Longer → packed passages** (`chunking.pack_sections`): whole adjacent
+      chapters up to the budget, seams between chapters; a chapter is split
+      only when it alone is over budget. Each passage ends with its own key
+      terms, which are split off before the reduce; the reduce (one round of
+      batches, concatenated) writes topics only; one overview call writes the
+      Overview; the key terms are merged deterministically into ONE list.
+
+    Unchanged load-bearing properties:
+
+    * **Locators survive.** Every section carries its own locator into the
+      prompt (`Chunk.to_prompt_text`).
+    * **Exhaustion stops the whole document, not one chunk.**
+    * **A reduce failure keeps the passage notes** (`_fallback`), and the
+      `_reduce_collapsed` guard rejects chat or fragments.
 
     The raw text is deliberately NOT appended the way a transcript is: book text
     is copyrighted, and writing a whole book into an artifact that may land in a
     vault or a repo is not something to do by default.
     """
-    from video2mdnotes.core.chunking import chunk_sections
+    from video2mdnotes.core import docnotes
+    from video2mdnotes.core.chunking import pack_sections
 
-    chunks = chunk_sections(source.sections, **(
+    chunks = pack_sections(source.sections, **(
         {"max_words": max_words} if max_words else {}))
     if not chunks:
         return SummaryResult(
@@ -645,98 +764,133 @@ def summarize_document(source, max_words: int = None, progress=None) -> SummaryR
             generated_at=dt.datetime.now(),
         )
 
-    notes: list[str] = []
     models: set[str] = set()
-    for chunk in chunks:
+    calls = 0
+    label = getattr(source, "source_id", None) or source.title
+    info: dict = {}
+
+    if len(chunks) == 1:
+        chunk = chunks[0]
         if progress:
             progress(chunk.index, chunk.total, chunk.locator)
-        header = (
-            f"Book: {source.title}\n"
-            f"Passage {chunk.index} of {chunk.total} — locator [{chunk.locator}]\n\n"
-        )
-        output, model = complete_with_failover(
-            _CHUNK_SYSTEM, header + chunk.to_prompt_text()
-        )
+        header = (f"Document: {source.title}\n"
+                  f"The complete document — locator span [{chunk.locator}]\n\n")
+        output, model = complete_with_failover(_WHOLE_SYSTEM, header + chunk.to_prompt_text())
         models.add(model)
-        if output.strip().upper() != "SKIP":
-            notes.append(f"### [{chunk.locator}] {' > '.join(chunk.heading_path)}\n{output.strip()}")
-
-    if not notes:
-        return SummaryResult(
-            source_file=Path(source.origin), model_name=", ".join(sorted(models)) or "none",
-            summary_text=EMPTY_TRANSCRIPT_PLACEHOLDER,
-            generated_at=dt.datetime.now(),
-        )
-
-    # The per-passage notes are the expensive part — one model call each, and
-    # for a book that is most of the run. Everything below is a *reduce* over
-    # them, and a reduce failure must never discard them. The media path already
-    # guarantees this for transcripts ("transcript survives a summarizer
-    # failure"); a book that cost 16 calls deserves the same.
-    passage_notes = list(notes)
-
-    def _fallback(reason: str) -> str:
-        return (
-            f"# {source.title} — passage notes\n\n"
-            f"> The per-passage notes below are complete. Combining them into a "
-            f"single summary failed: {reason}\n"
-            f"> Re-running will reuse nothing, so keep this file.\n\n"
-            + "\n\n".join(passage_notes)
-        )
-
-    # Reduce in exactly ONE round of batches, then CONCATENATE the results.
-    #
-    # Reducing recursively — summarizing summaries until one call can hold
-    # everything — is the obvious design and it fails twice over. It compounds
-    # loss at every round, and the second round hands the model text that is
-    # already assembled notes, which it reads as finished work: one real run
-    # returned "This is excellent work ✓ Locators preserved… Do you want me to
-    # merge Chapters 1–5?" — 177 words of chat in place of a book.
-    #
-    # Concatenation avoids both. Each batch covers a contiguous, ordered span of
-    # the book and keeps its own locators, so joining them is coherent without a
-    # second pass that can only lose detail.
-    try:
-        if len(notes) <= _REDUCE_BATCH:
-            final, model = complete_with_failover(
-                _REDUCE_SYSTEM, f"Book: {source.title}\n\n" + "\n\n".join(notes)
+        calls += 1
+        output = _strip_chat_preamble(output)
+        if not output.strip() or output.strip().upper() == "SKIP":
+            return SummaryResult(
+                source_file=Path(source.origin), model_name=model,
+                summary_text=EMPTY_TRANSCRIPT_PLACEHOLDER,
+                generated_at=dt.datetime.now(),
+            )
+        if len(output.split()) < 300 and source.word_count > 2_000:
+            raise RuntimeError(
+                f"the document call returned {len(output.split())} words for a "
+                f"{source.word_count:,}-word document — chat or truncation, not notes")
+        final, info = _finish_notes(output, label)
+    else:
+        notes: list[str] = []
+        passage_terms: list[str] = []
+        for chunk in chunks:
+            if progress:
+                progress(chunk.index, chunk.total, chunk.locator)
+            header = (
+                f"Book: {source.title}\n"
+                f"Passage {chunk.index} of {chunk.total} — locator [{chunk.locator}]\n\n"
+            )
+            output, model = complete_with_failover(
+                _CHUNK_SYSTEM, header + chunk.to_prompt_text()
             )
             models.add(model)
-        else:
+            calls += 1
+            if output.strip().upper() != "SKIP":
+                body, terms, _ = docnotes.split_terms(output.strip())
+                passage_terms.extend(terms)
+                notes.append(f"### [{chunk.locator}] {' > '.join(chunk.heading_path)}\n"
+                             f"{body.strip()}")
+
+        if not notes:
+            return SummaryResult(
+                source_file=Path(source.origin),
+                model_name=", ".join(sorted(models)) or "none",
+                summary_text=EMPTY_TRANSCRIPT_PLACEHOLDER,
+                generated_at=dt.datetime.now(),
+            )
+
+        # The per-passage notes are the expensive part — one model call each,
+        # and for a book that is most of the run. Everything below is a
+        # *reduce* over them, and a reduce failure must never discard them.
+        passage_notes = list(notes)
+
+        def _fallback(reason: str) -> str:
+            return (
+                f"# {source.title} — passage notes\n\n"
+                f"> The per-passage notes below are complete. Combining them into a "
+                f"single summary failed: {reason}\n"
+                f"> Re-running will reuse nothing, so keep this file.\n\n"
+                + "\n\n".join(passage_notes)
+            )
+
+        # Reduce in exactly ONE round of batches, then CONCATENATE the results.
+        #
+        # Reducing recursively — summarizing summaries until one call can hold
+        # everything — compounds loss at every round, and the second round
+        # hands the model text that is already assembled notes, which it reads
+        # as finished work ("This is excellent work ✓ … Do you want me to merge
+        # Chapters 1–5?" — 177 words of chat in place of a book).
+        #
+        # Concatenation is safe now that batches write TOPICS ONLY: the one
+        # Overview and the one Key terms list are built for the whole document
+        # below, so seams no longer repeat them.
+        try:
             parts = []
             for i in range(0, len(notes), _REDUCE_BATCH):
                 batch = notes[i:i + _REDUCE_BATCH]
+                scope = ("" if len(notes) <= _REDUCE_BATCH else
+                         f"You are given passages {i + 1}-{i + len(batch)} of "
+                         f"{len(notes)}; another pass covers the rest. Do NOT title "
+                         f"the output after the passage numbers - that is internal "
+                         f"batching a reader should never see. Use the topics.\n")
                 output, model = complete_with_failover(
-                    _REDUCE_SYSTEM,
-                    f"Book: {source.title}\n"
-                    f"You are given passages {i + 1}-{i + len(batch)} of "
-                    f"{len(notes)}; another pass covers the rest. Do NOT title "
-                    f"the output after the passage numbers - that is internal "
-                    f"batching a reader should never see. Use the topics.\n\n"
-                    + "\n\n".join(batch),
-                )
+                    _REDUCE_SYSTEM, f"Book: {source.title}\n{scope}\n" + "\n\n".join(batch))
                 models.add(model)
-                parts.append(output.strip())
-            final = _strip_chat_preamble("\n\n---\n\n".join(parts))
+                calls += 1
+                parts.append(_drop_title_line(_strip_chat_preamble(output)))
+            topics = "\n\n".join(parts)
+            topics, reduce_terms, _ = docnotes.split_terms(topics)
+            if _reduce_collapsed(topics, passage_notes):
+                final, info = _finish_notes(_fallback(
+                    f"the reduce returned {len(topics.split())} words from "
+                    f"{sum(len(n.split()) for n in passage_notes)} words of passage "
+                    f"notes — it chatted or truncated instead of assembling"
+                ), label, passage_terms)
+            else:
+                overview, model, why = _write_overview(source.title, topics)
+                if model:
+                    models.add(model)
+                    calls += 1
+                elif why:
+                    calls += 1
+                assembled = (f"# {source.title}\n\n## Overview\n\n{overview}\n\n"
+                             f"{topics.strip()}\n")
+                final, info = _finish_notes(assembled, label, passage_terms + reduce_terms)
+                if why:
+                    info["overview_fallback"] = why
+        except (SubscriptionExhausted, BudgetExhausted):
+            raise
+        except Exception as exc:  # noqa: BLE001 - keep the work that succeeded
+            final, info = _finish_notes(_fallback(str(exc)[:200]), label, passage_terms)
 
-        final = _strip_chat_preamble(final)
-        if _reduce_collapsed(final, passage_notes):
-            final = _fallback(
-                f"the reduce returned {len(final.split())} words from "
-                f"{sum(len(n.split()) for n in passage_notes)} words of passage "
-                f"notes — it chatted or truncated instead of assembling"
-            )
-    except (SubscriptionExhausted, BudgetExhausted):
-        raise
-    except Exception as exc:  # noqa: BLE001 - keep the work that succeeded
-        final = _fallback(str(exc)[:200])
-
+    repairs = info.get("fence_repairs") or []
     provenance = (
         f"\n\n---\nsource: {source.origin}\n"
         f"provenance: {source.provenance}\n"
         f"structure_is_inferred: {source.structure_is_inferred}\n"
-        f"passages: {len(chunks)}  words: {source.word_count:,}\n"
+        f"passages: {len(chunks)}  words: {source.word_count:,}  model_calls: {calls}\n"
         f"models: {', '.join(sorted(models))}\n"
+        + (f"code_fence_repairs: {len(repairs)}\n" if repairs else "")
     )
     return SummaryResult(
         source_file=Path(source.origin),

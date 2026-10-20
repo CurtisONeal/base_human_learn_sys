@@ -26,6 +26,7 @@ import re
 from pathlib import Path
 from typing import List, Tuple
 
+from video2mdnotes.core.fences import _parse_fence
 from video2mdnotes.core.sources import Section, SourceText, build_full_text
 
 SUPPORTED = {".md", ".markdown", ".txt", ".text"}
@@ -76,7 +77,22 @@ def _split_markdown(text: str) -> List[Tuple[List[str], str, int, int]]:
         if body.strip():
             sections.append((list(trail), body, heading_start_line, end_line))
 
+    # Fence-aware (WP-D1): a `# comment` line inside a ```bash block is code,
+    # not a heading. Treating it as one cut the T8 note into 62 sections, split
+    # 30 code blocks across sections (an opening fence in one passage, its
+    # closer in the next) and made every comment a new top-level "chapter",
+    # so 8,956 words became 22 passages.
+    fence = None
     for i, line in enumerate(lines):
+        parsed = _parse_fence(line)
+        if fence is not None:
+            if (parsed is not None and parsed.char == fence.char
+                    and parsed.length >= fence.length and not parsed.info):
+                fence = None
+            continue
+        if parsed is not None:
+            fence = parsed
+            continue
         match = _ATX_HEADING.match(line)
         if not match:
             continue

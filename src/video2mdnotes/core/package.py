@@ -513,10 +513,8 @@ def _image_dims(data: bytes) -> Optional[Tuple[int, int]]:
         return None
 
 
-def _build_epub(path: Path) -> DocModel:
-    from video2mdnotes.core.documents import epub as epubx
-
-    source = epubx.extract(path)
+def _headings_from_sections(source) -> Tuple[List[Heading], Dict[int, int]]:
+    """One Heading per extracted section (plus merged-away ancestors)."""
     headings: List[Heading] = []
     open_trail: List[str] = []
     section_heading: Dict[int, int] = {}
@@ -541,7 +539,27 @@ def _build_epub(path: Path) -> DocModel:
         headings.append(h)
         section_heading[si] = h.idx
         open_trail = trail
+    return headings, section_heading
 
+
+def _build_markdown(path: Path) -> DocModel:
+    """A .md/.txt note (WP-D1): its ATX headings are the structure, `[§Title]`
+    citations land on them. No figures; the text files are the note's own
+    sections, fenced code kept verbatim."""
+    from video2mdnotes.core.documents import plaintext
+
+    source = plaintext.extract(path)
+    headings, _ = _headings_from_sections(source)
+    files = _assign_files(headings, _split_depth([h.trail for h in headings]))
+    return DocModel(kind="markdown", title=source.title, headings=headings, files=files,
+                    provenance=source.provenance)
+
+
+def _build_epub(path: Path) -> DocModel:
+    from video2mdnotes.core.documents import epub as epubx
+
+    source = epubx.extract(path)
+    headings, section_heading = _headings_from_sections(source)
     files = _assign_files(headings, _split_depth([h.trail for h in headings]))
     model = DocModel(kind="epub", title=source.title, headings=headings, files=files,
                      provenance=source.provenance)
@@ -1143,6 +1161,21 @@ def _notes_title(text: str) -> Optional[str]:
     return None
 
 
+_FOOTER_SOURCE = re.compile(r"(?m)^source:[ \t]+(/[^\n]+?)[ \t]*$")
+
+
+def _footer_source(notes: str) -> Optional[Path]:
+    """The local file a document run's provenance footer names, if it exists."""
+    found = _FOOTER_SOURCE.findall(notes or "")
+    if not found:
+        return None
+    path = Path(found[-1])
+    if path.suffix.lower() not in (".pdf", ".epub", ".md", ".markdown", ".txt"):
+        return None
+    _refuse_forbidden(path)
+    return path if path.is_file() else None
+
+
 def _find_notes(path: Path) -> Tuple[Path, Optional[Path]]:
     """(notes file, run dir or None) for a run dir or a notes file."""
     path = Path(path).expanduser()
@@ -1196,20 +1229,34 @@ def package(
     notes_path, run_dir = _find_notes(Path(notes_or_run))
     _refuse_forbidden(notes_path)
     notes_raw = notes_path.read_text(encoding="utf-8")
+    # WP-D1: repair BEFORE rewriting citations — the rewriter skips lines it
+    # believes are inside a fence, so an unclosed one would leave every later
+    # citation as plain text.
+    from video2mdnotes.core.fences import repair_fences
+    notes_raw, fence_repairs = repair_fences(notes_raw, label=notes_path.name)
     run_meta: Dict = {}
     if run_dir and (run_dir / "source_meta.json").exists():
         run_meta = json.loads((run_dir / "source_meta.json").read_text(encoding="utf-8"))
 
     kind = None
+    source_from = "--source" if source is not None else None
+    if source is None and not run_meta:
+        # Document notes end with a provenance footer naming the file they
+        # were made from ("source: /path/to/note.md"). Use it when it is a
+        # local file that still exists — the same file --source would name.
+        named = _footer_source(notes_raw)
+        if named is not None:
+            source, source_from = named, "provenance footer"
     if source is not None:
         source = Path(source).expanduser()
         _refuse_forbidden(source)
         if not source.is_file():
             raise PackageError(f"{source}: source file not found")
         ext = source.suffix.lower()
-        if ext not in (".pdf", ".epub"):
-            raise PackageError(f"{source}: only .pdf and .epub sources are packaged with --source")
-        kind = ext.lstrip(".")
+        if ext not in (".pdf", ".epub", ".md", ".markdown", ".txt"):
+            raise PackageError(f"{source}: only .pdf, .epub and .md/.txt sources are "
+                               "packaged with --source")
+        kind = "markdown" if ext in (".md", ".markdown", ".txt") else ext.lstrip(".")
     elif run_meta:
         kind = "youtube" if youtube_id(run_meta.get("url")) else "local_media"
     else:
@@ -1228,15 +1275,18 @@ def package(
     files: Dict[str, bytes] = {}           # path relative to pkg_dir -> content
     report: Dict = {"packager": PACKAGER, "kind": kind, "subject": subject_slug, "slug": slug,
                     "notes_source": str(notes_path.resolve())}
+    if source_from:
+        report["source_from"] = source_from
     binary_target: Optional[Path] = None
     meta: Dict = {"packager": PACKAGER, "subject": subject_slug, "slug": slug, "kind": kind,
                   "title": title, "notes_source": str(notes_path.resolve()),
                   "run_dir": str(run_dir.resolve()) if run_dir else None}
 
-    if kind in ("pdf", "epub"):
-        binary_target = src_dir / f"{slug}.{kind}"
+    if kind in ("pdf", "epub", "markdown"):
+        ext = source.suffix.lower() if kind == "markdown" else f".{kind}"
+        binary_target = src_dir / f"{slug}{ext}"
         model = (_build_pdf(source, text_dir, binary_target) if kind == "pdf"
-                 else _build_epub(source))
+                 else _build_epub(source) if kind == "epub" else _build_markdown(source))
         resolver = DocResolver(model, pkg_dir, text_dir, binary_target)
         notes, stats = rewrite_citations(notes_raw, resolver)
         for fig in model.figures:
@@ -1291,6 +1341,9 @@ def package(
                           "duration_s": run_meta.get("duration_s")}
 
     notes = _insert_banner(notes, banner)
+    # WP-D1: and again on what is written — never an odd fence count in notes.md.
+    notes, late_repairs = repair_fences(notes, label=f"package {slug}")
+    report["fence_repairs"] = fence_repairs + late_repairs
     notes_bytes = notes.encode("utf-8")
     report["citations"] = {"total": stats["citations"], "linked": stats["linked"],
                            "unresolved_count": len(stats["unresolved"]),

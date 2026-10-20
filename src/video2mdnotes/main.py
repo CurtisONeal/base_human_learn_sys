@@ -109,6 +109,18 @@ def _transcript_segments(project_dir: Path):
     return segments
 
 
+def _write_notes(path: Path, text: str) -> None:
+    """Write an assembled notes file with balanced code fences (WP-D1).
+
+    Every notes file — media or document — goes through here: an unclosed
+    fence turns the rest of the note into one code block in Obsidian.
+    """
+    from video2mdnotes.core.fences import repair_fences
+
+    fixed, _ = repair_fences(text, label=path.name)
+    path.write_text(fixed, encoding="utf-8")
+
+
 def _add_visuals(project_dir: Path, source, summary_path: Path) -> None:
     """Add a visual section to notes that already exist, without re-transcribing.
 
@@ -133,12 +145,9 @@ def _add_visuals(project_dir: Path, source, summary_path: Path) -> None:
             logger.info(f"Frames carried no readable content for {source.title}")
             return
 
-        summary_path.write_text(
-            visuals.insert_visual_section(
-                summary_path.read_text(encoding="utf-8"), visual_markdown
-            ),
-            encoding="utf-8",
-        )
+        _write_notes(summary_path, visuals.insert_visual_section(
+            summary_path.read_text(encoding="utf-8"), visual_markdown
+        ))
         logger.success(f"Added {len(readings)} visual(s) to {summary_path.name}")
 
         # The notes may now be usable even though the audio produced nothing.
@@ -619,7 +628,7 @@ def media(
         summaries_dir.mkdir(parents=True, exist_ok=True)
         if EMPTY_TRANSCRIPT_PLACEHOLDER in result.summary_text:
             summary_path = summaries_dir / f"{NO_SUMMARY_PREFIX}{safe_title}.summary.md"
-        summary_path.write_text(result.summary_text, encoding="utf-8")
+        _write_notes(summary_path, result.summary_text)
         console.print(f"      [green]Notes:[/green] {summary_path}")
         report.add(project_dir, "ok")
         done += 1
@@ -858,7 +867,7 @@ def _summarize_and_write_document(
     deliberately uncounted in any tally — it summarized nothing, so "skipped"
     would misreport it as work that was avoided rather than never attempted.
     """
-    from video2mdnotes.core.chunking import chunk_sections
+    from video2mdnotes.core.chunking import pack_sections
     from video2mdnotes.core.summarizer import summarize_document
 
     out_root.mkdir(parents=True, exist_ok=True)
@@ -867,7 +876,7 @@ def _summarize_and_write_document(
         console.print(f"{label} [dim]Skipping (already summarized):[/dim] {source.title}")
         return "skipped"
 
-    chunks = chunk_sections(source.sections, **({"max_words": max_words} if max_words else {}))
+    chunks = pack_sections(source.sections, **({"max_words": max_words} if max_words else {}))
     warning = " [yellow](structure inferred)[/yellow]" if source.structure_is_inferred else ""
     console.print(
         f"{label} [bold]{source.title}[/bold]{warning}\n"
@@ -913,7 +922,7 @@ def _summarize_and_write_document(
     # is, so a directory listing shows which runs are worthless unopened.
     if EMPTY_TRANSCRIPT_PLACEHOLDER in result.summary_text:
         summary_path = summary_path.with_name(NO_SUMMARY_PREFIX + summary_path.name)
-    summary_path.write_text(result.summary_text, encoding="utf-8")
+    _write_notes(summary_path, result.summary_text)
     console.print(f"      [green]Notes:[/green] {summary_path}")
     return "done"
 
@@ -1340,7 +1349,7 @@ def process(
             summary_text = visuals.insert_visual_section(
                 summary_result.summary_text, visual_markdown
             )
-            summary_path.write_text(summary_text, encoding="utf-8")
+            _write_notes(summary_path, summary_text)
 
             # A run that produced no usable notes (silent/music-only source with
             # nothing on screen either) is a legitimate outcome, but in a
@@ -1422,7 +1431,7 @@ def process(
 def package_cmd(
     target: Path = typer.Argument(..., help="Run dir (summaries/*.summary.md + source_meta.json) or a notes file"),
     subject: str = typer.Option(..., "--subject", help="Subject folder, e.g. azure_identity"),
-    source: Path = typer.Option(None, "--source", help="The original .pdf/.epub the notes cite (documents)"),
+    source: Path = typer.Option(None, "--source", help="The original .pdf/.epub/.md the notes cite (default: the notes' provenance footer)"),
     vault: Path = typer.Option(None, "--vault", help="Obsidian vault root (default OBSIDIAN_VAULT)"),
     slug: str = typer.Option(None, "--slug", help="Package folder name (default: from the title)"),
     force: bool = typer.Option(False, "--force", help="Overwrite a notes.md that was edited in the vault"),

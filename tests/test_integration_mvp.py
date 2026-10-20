@@ -86,6 +86,13 @@ class MvpLLM:
         system = Path(system_prompt_file).read_text(encoding="utf-8")
         if system == summarizer._CHUNK_SYSTEM:
             kind, out = "doc_chunk", self._chunk(user_message)
+        elif system == summarizer._WHOLE_SYSTEM:
+            kind = "doc_whole"
+            out = ("# Notes\n\n## Overview\n\nThe whole document in one call.\n\n## Topics\n\n"
+                   + self._chunk(user_message)
+                   + "\n\n## Key terms\n\n- **Term**: a definition\n")
+        elif system == summarizer._OVERVIEW_SYSTEM:
+            kind, out = "doc_overview", " ".join(["Overview of the document."] * 10)
         elif system == summarizer._REDUCE_SYSTEM:
             kind, out = "doc_reduce", self._reduce(user_message)
         else:
@@ -470,9 +477,10 @@ def test_process_local_document(env, name, locators):
     assert result.exit_code == 0, result.output
     assert last_line_run_dir(result.output) == out.resolve()
     assert env.downloads == [] and env.asr.calls == [] and env.fetched == []
-    kinds = env.llm.kinds()
-    assert kinds[-1] == "doc_reduce" and set(kinds[:-1]) == {"doc_chunk"}
+    # WP-D1: a fixture this small fits one passage → one whole-document call.
+    assert env.llm.kinds() == ["doc_whole"]
     notes = _doc_notes(out, "")
+    assert notes.count("## Overview") == 1 and notes.count("## Key terms") == 1
     cited = re.findall(r"\[([^\]\n]+)\]", notes)
     assert cited, notes
     for loc in locators or []:

@@ -14,6 +14,12 @@ exceeds the budget. Then split on paragraph boundaries and say so, because the
 second half of a split section is missing the context of the first and a reader
 should know that before trusting a claim drawn from it.
 
+**The document path calls `pack_sections`, not `chunk_sections` (WP-D1).** A
+document that fits the budget is ONE chunk; a longer one packs whole adjacent
+chapters up to the budget. `chunk_sections` (one chapter per chunk) is now
+only the fallback for a single chapter that alone exceeds the budget — used
+for every chapter, it cut an 8,956-word note into 22 passages.
+
 Word count, not tokens: the count is a *budgeting* device, and a tokenizer
 would add a dependency and a model-specific assumption to a number that only
 needs to be conservative. English prose runs ~1.3 tokens/word, code more, so
@@ -262,6 +268,75 @@ def chunk_sections(
                 and prev.word_count + tail.word_count <= max_words):
             prev.sections.extend(tail.sections)
             chunks.pop()
+
+    for i, chunk in enumerate(chunks):
+        chunk.index, chunk.total = i + 1, len(chunks)
+    return chunks
+
+
+def _chapters(sections: List[Section]) -> List[List[Section]]:
+    """Adjacent runs of sections that share a top-level heading."""
+    groups: List[List[Section]] = []
+    for sec in sections:
+        top = sec.path[0] if sec.path else None
+        if groups and (groups[-1][0].path[0] if groups[-1][0].path else None) == top:
+            groups[-1].append(sec)
+        else:
+            groups.append([sec])
+    return groups
+
+
+def pack_sections(
+    sections: Iterable[Section],
+    max_words: int = DEFAULT_MAX_WORDS,
+    skip_front_matter: bool = True,
+) -> List[Chunk]:
+    """Model-call units for the document path (WP-D1). Deterministic.
+
+    Mirrors the long-form `pack_passages` (WP-M2):
+
+    * **The whole document fits → ONE chunk.** A sub-budget document is read
+      in one call with every section locator intact. T8 cut an 8,956-word note
+      into 22 passages and concatenated four reduce batches, which gave the
+      notes four `## Overview`s and three `## Key terms`, and split topics
+      across seams ("Client secret" twice).
+    * **Otherwise whole chapters are packed greedily** up to `max_words`, so
+      every seam falls BETWEEN chapters. A chunk may now hold several chapters:
+      attribution no longer depends on one-chapter-per-chunk, because
+      `to_prompt_text` prints each section's own locator.
+    * **A chapter is split only when it alone exceeds the budget**, and then
+      exactly as `chunk_sections` does (section boundaries, oversized sections
+      on paragraphs, `is_partial` declared).
+    """
+    sections = [s for s in sections if s.text.strip()]
+    if skip_front_matter:
+        sections = drop_front_matter(sections)
+    if not sections:
+        return []
+
+    def words(secs: List[Section]) -> int:
+        return sum(s.word_count for s in secs)
+
+    chunks: List[Chunk] = []
+    if words(sections) <= max_words:
+        chunks = [Chunk(sections=list(sections))]
+    else:
+        current: List[Section] = []
+        for chapter in _chapters(sections):
+            size = words(chapter)
+            if size > max_words:
+                if current:
+                    chunks.append(Chunk(sections=current))
+                    current = []
+                chunks.extend(chunk_sections(chapter, max_words=max_words,
+                                             skip_front_matter=False))
+                continue
+            if current and words(current) + size > max_words:
+                chunks.append(Chunk(sections=current))
+                current = []
+            current.extend(chapter)
+        if current:
+            chunks.append(Chunk(sections=current))
 
     for i, chunk in enumerate(chunks):
         chunk.index, chunk.total = i + 1, len(chunks)
