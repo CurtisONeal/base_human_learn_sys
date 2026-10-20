@@ -13,6 +13,34 @@ Newest first. Format: symptom → cause → fix → how we know.
 
 ---
 
+### An 8,956-word note became 22 passages and four Overviews (WP-D1)
+- **Symptom:** T8 (`process` on the Entra Obsidian note) produced notes with
+  `## Overview` ×4, `## Key terms` ×3, four `# ` titles and topics split across
+  seams ("Client secret" twice). The model wrote "the source shows these
+  commands without a ``` fence" — because the fence it was given really had
+  been cut off.
+- **Cause (two):** (1) `documents/plaintext._split_markdown` was not
+  fence-aware: every `# comment` line inside a ```bash block was an ATX
+  heading. Measured: 62 sections, 22 top-level groups, 17 sections holding
+  half a code block. (2) `chunk_sections` starts a new chunk at every
+  top-level heading, so those 22 groups were 22 passages; the reduce then ran
+  in 4 batches of 6, each writing its own title/Overview/Key terms, and the
+  batches were concatenated.
+- **Fix:** fence-aware heading split (43 sections, 0 cut code blocks);
+  `chunking.pack_sections` (one chunk when the document fits 12k words,
+  otherwise whole chapters packed); single `_WHOLE_SYSTEM` call for one-chunk
+  documents; multi-passage reduce writes topics only, one overview call,
+  key terms merged by `docnotes.consolidate`. `fences.repair_fences` runs on
+  every assembled notes file and in the packager.
+- **Note on T8's fence count:** `grep -c '```'` gives 95, but one is an inline
+  mention on line 544; the 94 line-start fences pair up under CommonMark rules.
+  The "unclosed fence" was inferred from the odd grep count, not observed in
+  Obsidian.
+- **How we know:** `tests/test_document_path_d1.py` (one call / one Overview
+  on a 9k-word note with bash comments; packing; merged key terms; nine fence
+  repair cases; markdown packaging). The T8b rerun is described in the WP-D1
+  report.
+
 ### Every bookmarked PDF was titled after its last bookmark (WP-M1b)
 - **Symptom:** `tiny_paper.pdf`, with metadata title "Chunk Size and Retrieval" and
   bookmarks Introduction/Method/Results, came out titled "Results". That wrong title

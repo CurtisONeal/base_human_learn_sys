@@ -661,6 +661,30 @@ search, so it's asked to flag its own uncertainty rather than assert flatly). Po
 base_human_learn_sys and validated 2026-08-08 against real technical (AI Daily Brief
 podcast) and Aikido content.
 
+### Text documents (document path, WP-D1)
+
+`book`, and `process` on a local `.md`/`.txt`/`.html`/`.pdf`/`.epub` or an
+article URL, go through `summarize_document`:
+
+- **Fits 12,000 words → ONE model call** over the whole document, with every
+  section's locator (`[§…]`, `[p. N]`, `[ch. N]`) in the prompt. No reduce.
+- **Longer → packed passages** (`chunking.pack_sections`): whole adjacent
+  chapters share a passage up to the budget; a chapter is split only when it
+  alone is over. Each passage lists its key terms; the reduce (batches of six,
+  concatenated) writes topics only; one small call writes the Overview; the
+  key terms are merged deterministically. The notes have exactly one
+  `## Overview` and one `## Key terms`.
+- Markdown headings are read fence-aware: a `# comment` inside a code block is
+  code, not a section.
+- **Every notes file has balanced code fences** (`core/fences.py`, no model
+  call): an unclosed fence is closed before the next heading (list-item
+  indentation kept), a stray empty one removed, and the repair is logged.
+  Applied to document, media and long-form notes, and to the packager's
+  `notes.md`.
+
+`package <notes> --subject <s>` also takes `.md`/`.txt` sources: with no
+`--source` it uses the file named in the notes' `source:` provenance footer.
+
 ### Long recordings (long-form path)
 
 Every media/video transcript — `process` (with or without captions), `media`,
