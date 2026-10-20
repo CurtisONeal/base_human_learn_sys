@@ -504,3 +504,37 @@ def test_raffle_winner_is_redacted_in_packaged_transcript():
     assert NAME_WITHHELD in out
     assert "Chris Halasey" in out          # speakers introduced on stage are not private
     assert {e["rule"] for e in log} == {"private:name", "private:role_at_org"}
+
+
+def test_citation_followed_by_colon_is_linked_but_reference_definitions_are_not():
+    """Real notes: "…into three pillars [0:08:24]:" stayed plain text (28 in the
+    meetup package, 72 in Azure Pt 2) because `]:` was mistaken for a markdown
+    reference definition — which only exists at the start of a line."""
+    from video2mdnotes.core.package import rewrite_citations
+
+    class R:
+        def resolve(self, body):
+            from video2mdnotes.core.package import Resolution
+            if body[0].isdigit():
+                return Resolution(links=[f"[{body}](https://youtu.be/x?t=1)"], linked=1, any_link=True)
+            return None
+
+    notes = "- It breaks failure into three pillars [0:08:24]:\n[0:01:00]: https://example.com\n"
+    out, stats = rewrite_citations(notes, R())
+    first, refdef = out.split("\n")[:2]
+    assert "[0:08:24](https://youtu.be/x?t=1):" in first
+    assert refdef == "[0:01:00]: https://example.com"
+
+
+def test_back_to_back_time_citations_are_each_linked():
+    """Azure Pt 2: "[1:53:41][1:53:56]" stayed plain text — markdown treats
+    `[a][b]` as a reference link, so the chain was skipped."""
+    from video2mdnotes.core.package import rewrite_citations, Resolution
+
+    class R:
+        def resolve(self, body):
+            return Resolution(links=[f"[{body}](https://youtu.be/x?t=1)"], linked=1, any_link=True)
+
+    out, stats = rewrite_citations("- a bad position to be in [1:53:41][1:53:56][1:54:02].\n", R())
+    assert out.count("](https://youtu.be/x?t=1)") == 3, out
+    assert stats["linked"] == 3

@@ -635,7 +635,13 @@ _PAGE_PART = re.compile(
 _CH_PART = re.compile(r"^ch(?:apter|\.)?\s*(?P<n>\d+)(?:\s*,?\s*§\s*(?P<sec>.*))?$", re.I)
 _SEC_PART = re.compile(r"^§\s*(?P<sec>.+)$")
 # A bracket that is not already a link, an embed target or a wiki link.
-_BRACKET = re.compile(r"(?<![!\]\[])\[(?P<body>[^\[\]\n]{1,300})\](?![(\[:])")
+_BRACKET = re.compile(r"(?<![!\]\[])\[(?P<body>[^\[\]\n]{1,300})\](?![(\[])")
+# A markdown reference definition is `[label]: url` at the START of a line only;
+# a citation followed by ":" mid-sentence ("three pillars [0:08:24]:") is not one.
+_REF_DEF = re.compile(r"^\s{0,3}\[[^\]]+\]:")
+# "[1:53:41][1:53:56]" reads as a markdown reference link, so back-to-back
+# time citations are separated before linking (Azure Pt 2 had 77 such).
+_ADJ_TIME = re.compile(r"(\[\d{1,2}:\d{2}(?::\d{2})?(?:\.\d+)?[^\[\]\n]{0,20}\])(?=\[\d{1,2}:\d{2})")
 _INLINE_CODE = re.compile(r"`[^`\n]*`")
 _MD_LINK = re.compile(r"!?\[[^\]\n]*\]\([^)\n]*\)")
 _TS = r"\d{1,2}(?::\d{2}){1,2}(?:\.\d+)?"
@@ -853,10 +859,13 @@ def rewrite_citations(notes: str, resolver) -> Tuple[str, Dict]:
     for i, line, rewritable in list(_iter_body_lines(notes)):
         if not rewritable or "[" not in line:
             continue
+        line = _ADJ_TIME.sub(r"\1 ", line)
         protected = _protected_spans(line)
         out, last = [], 0
         for m in _BRACKET.finditer(line):
             if any(a <= m.start() < b for a, b in protected):
+                continue
+            if m.start() == len(line) - len(line.lstrip()) and _REF_DEF.match(line):
                 continue
             res = resolver.resolve(m.group("body"))
             if res is None:
@@ -879,6 +888,8 @@ def rewrite_citations(notes: str, resolver) -> Tuple[str, Dict]:
         if out:
             out.append(line[last:])
             lines[i] = "".join(out)
+        elif line != lines[i]:
+            lines[i] = line
     return "\n".join(lines), stats
 
 
