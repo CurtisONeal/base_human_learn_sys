@@ -87,6 +87,9 @@ def _refuse_forbidden(path: Path) -> None:
 
 def slugify(text: str, max_len: int = 64) -> str:
     text = unicodedata.normalize("NFKD", text or "").encode("ascii", "ignore").decode()
+    # Apostrophes vanish rather than splitting a word, matching run-dir names
+    # (downloader.sanitize_filename): "Let's" -> "lets", never "let_s".
+    text = re.sub(r"['\u2019`]", "", text)
     slug = re.sub(r"[^A-Za-z0-9]+", "_", text).strip("_").lower()
     if len(slug) > max_len:
         cut = slug[:max_len]

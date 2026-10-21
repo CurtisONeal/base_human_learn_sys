@@ -538,3 +538,14 @@ def test_back_to_back_time_citations_are_each_linked():
     out, stats = rewrite_citations("- a bad position to be in [1:53:41][1:53:56][1:54:02].\n", R())
     assert out.count("](https://youtu.be/x?t=1)") == 3, out
     assert stats["linked"] == 3
+
+
+def test_package_slug_matches_run_dir_naming_for_apostrophes():
+    """The Karpathy package landed in `let_s_build_gpt…` while its run dir is
+    `lets_build_gpt…` — the same title-to-name mismatch WP-M3 fixed for runs."""
+    from video2mdnotes.core.package import slugify
+    from video2mdnotes.core.downloader import sanitize_filename
+
+    title = "Let's build GPT: from scratch, in code, spelled out."
+    assert slugify(title) == "lets_build_gpt_from_scratch_in_code_spelled_out"
+    assert slugify(title) == sanitize_filename(title).lower()
