@@ -812,6 +812,52 @@ glossary; residual mishearings are fixed and logged in `corrections.json` with
 rule `notes:<rule>`. The full transcript is **not** appended (it is in
 `transcripts/`). Score a run with `scripts/eval_longform.py` (below).
 
+### People section and prompt variants (A/B)
+
+With the default prompt variant `current`, every passage (media) and every
+document passage also writes a **People** table — person · role in this source
+(host / interviewer / guest / interviewee / speaker / panelist / quoted / cited
+author / person discussed) · affiliation & background **as stated** (never
+model knowledge unless labelled "per model knowledge") · relevance to the topic
+· citations. Prompt text: `prompts/fragments/people.md` (media) and
+`_DOC_PEOPLE_RULES` in `core/summarizer.py` (documents).
+
+Assembly (`core/people.py`, no model call) writes exactly ONE `## People`:
+media notes after the Course Map, documents right before `## Key terms`. Rows
+are merged across passages by normalised name (a bare first/last name joins
+its one full name; for machine transcripts sounds-alike surnames and outline
+speaker variants are the same person), with the most specific role, the
+richest stated background, citations unioned (time order, first 6), speakers
+first. ASR-only names get the same `(ASR spelling)` hedge as the body and are
+listed in the names table; private individuals (winners, attendees) are
+dropped. Package linking links People citations like any other.
+
+`--prompt-variant legacy` (or `PROMPT_VARIANT=legacy`) on `process`, `media`,
+`longform` and `book` uses exactly the prompts from before People (byte-identical,
+guarded by `tests/fixtures/prompt_variants/`). The variant is recorded as
+`prompt_variant` in the frontmatter (documents: the provenance footer) and in
+`longform_state.json`; a passage checkpointed under the other variant is
+re-run, never reused. A/B on one transcript: run once, copy
+`transcripts/` + `source_meta.json` to a second dir, `longform <copy>
+--prompt-variant <other>`.
+
+### Selecting from large playlists
+
+```bash
+# Look first: index, id, date, duration, title — no download, no model call
+process "<playlist url>" --dry-run-list --limit 3
+process "<playlist url>" --items "1-3,7"              # yt-dlp playlist_items syntax, 1-based
+process "<playlist url>" --since 2026-10-13 --until 2026-10-19
+```
+
+The listing is flat and lazy (`core/playlist.py`): index filters (`--items`,
+`--limit`) never fetch per-entry metadata and stop reading at the last
+position that can match; `--since`/`--until` fetch the upload date only for
+candidates (flat YouTube entries have none) and stop once a newest-first
+playlist is past `--since` (2 consecutive older entries). The 1,202-entry AI
+Daily Brief playlist with `--limit 3` reads 3 entries; `--since` a few days
+back reads ~7. Metadata fetched while selecting is reused for the run.
+
 ## Development
 If you want to modify the code or run tests locally, you'll need a local Python environment.
 

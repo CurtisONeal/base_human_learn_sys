@@ -13,7 +13,10 @@ from video2mdnotes.config import settings
 from video2mdnotes.core import docnotes, domains, longform as lf, people, summarizer, variants
 from video2mdnotes.core.package import MediaResolver, rewrite_citations
 
-from test_longform import MockLLM, small_run  # noqa: F401  (fixture)
+import test_longform
+from test_longform import MockLLM
+
+small_run = test_longform.small_run   # reuse the fixture
 
 FIX = Path(__file__).parent / "fixtures" / "prompt_variants"
 
