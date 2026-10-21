@@ -13,6 +13,17 @@ Newest first. Format: symptom → cause → fix → how we know.
 
 ---
 
+### Eval P6 failed notes for listing a mishearing on purpose (WP-P2)
+- **Symptom:** Stage 3 AIDB run: SX9LQD3yINg failed P6 ("1 residual
+  mishearing") on "Cloud Code → Claude Code".
+- **Cause:** the hit was the notes' own `## Transcription Uncertainty` row,
+  which records the mishearing (heard → probable) deliberately; P6 scanned
+  every body line.
+- **Fix:** P6 skips the Transcription Uncertainty section (to the next
+  heading of the same or higher level; linked headings too).
+- **How we know:** `test_p6_ignores_transcription_uncertainty_section`; the
+  same form outside the section is still a hit.
+
 ### An 8,956-word note became 22 passages and four Overviews (WP-D1)
 - **Symptom:** T8 (`process` on the Entra Obsidian note) produced notes with
   `## Overview` ×4, `## Key terms` ×3, four `# ` titles and topics split across

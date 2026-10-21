@@ -908,6 +908,38 @@ Caching and reruns:
 A span that is not over yet is labelled partial. Design:
 `design/DIGESTS.md`.
 
+Digests also carry **Sources of the week/month**: the episodes' Sources
+Referenced tables merged deterministically (one row per source, episodes and
+times cited, episode links). No model call.
+
+### Sources Referenced (prompt variant `current`)
+
+Long-form passages, multi-chapter packs and documents write a `Sources
+Referenced` table next to People: the outlets, podcasts, papers, reports,
+books, posts, datasets, videos and talks the source cites — source · type ·
+who cited it (by role) · what for · date/edition · citations. People are never
+sources (a person's own podcast or newsletter is; the person stays in
+People). Merged once per notes file (`core/cited_sources.py`), linked by
+`package`. Prompt: `prompts/fragments/sources.md`. `legacy` is unchanged.
+
+### Person and sources index: `annotate-people`
+
+```bash
+annotate-people ai_daily_brief --root previous_run_results/collections   # a collection
+annotate-people <run_dir> --collection ai_daily_brief                     # add one run
+annotate-people <vault>/.../digests/2026-W43.md                           # a digest's episodes
+```
+
+Writes `people/_index.md`, `people/<slug>.md`, `people/_resolutions.md` and
+`sources/_index.md` in the collection folder and the vault subject folder.
+The model is used only for a 2–3 sentence description of each NEW person
+(labelled per model knowledge; "No reliable model knowledge; known only from
+sources" otherwise; private individuals get no note) and to resolve vague
+role references ("the Secretary of State") as of the episode date, flagged
+"verify" after the model's knowledge cutoff — 20 people + 20 roles per call.
+A rerun with nothing new makes 0 calls. `--max-calls N`, `--refresh`,
+`--no-annotate-notes`. Design: `design/ANNOTATE_PEOPLE.md`.
+
 ## Development
 If you want to modify the code or run tests locally, you'll need a local Python environment.
 
