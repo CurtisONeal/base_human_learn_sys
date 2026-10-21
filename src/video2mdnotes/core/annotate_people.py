@@ -691,8 +691,12 @@ def _q(v: Any) -> str:
 
 
 def _web_found(rec: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """A lookup good enough to BE the description: found, high/medium
+    confidence. A low-confidence identity match is shown only as a possible
+    match next to "No reliable model knowledge" (never adopted)."""
     w = (rec or {}).get("web")
-    return w if w and w.get("status") == "found" and w.get("description") else None
+    return (w if w and w.get("status") == "found" and w.get("description")
+            and w.get("confidence") in ("high", "medium") else None)
 
 
 def _description(rec: Optional[Dict[str, Any]]) -> Tuple[str, str]:
@@ -751,8 +755,12 @@ def render_person(p: PersonEntry, rec: Optional[Dict[str, Any]], pdir: Path,
                 md += [f"_Model knowledge, for comparison: {rec['description']}_", ""]
     elif kind == "none" and (rec or {}).get("web"):
         wn = rec["web"]
-        md += [f"_Web lookup {wn.get('looked_up_at')}: not found"
-               f"{' (' + wn['note'] + ')' if wn.get('note') else ''}._", ""]
+        if wn.get("status") == "found":
+            md += [f"_Possible match, {web_label(wn)} — low confidence, not adopted: "
+                   f"{wn.get('description')}_", ""]
+        else:
+            md += [f"_Web lookup {wn.get('looked_up_at')}: not found"
+                   f"{' (' + wn['note'] + ')' if wn.get('note') else ''}._", ""]
     md += ["## As stated in sources", ""]
     stated = []
     for a in p.apps:
@@ -1213,7 +1221,9 @@ def _web_summary(state: Dict[str, Any], wlog: WebLog) -> Dict[str, Any]:
     roles = [r for r in state["roles"].values() if r.get("verify") or "web" in r]
     def tally(recs):
         st = [(r.get("web") or {}).get("status") for r in recs]
-        return {"eligible": len(recs), "found": st.count("found"),
+        low = sum(1 for r in recs if (r.get("web") or {}).get("status") == "found"
+                  and r["web"].get("confidence") == "low")
+        return {"eligible": len(recs), "found": st.count("found") - low, "low_confidence": low,
                 "not_found": st.count("not_found"), "pending": st.count(None)}
     return {"calls": wlog.calls, "models": wlog.models, "targets": wlog.targets,
             "sent": wlog.sent, "found": wlog.found, "not_found": wlog.not_found,

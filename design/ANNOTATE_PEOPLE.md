@@ -62,6 +62,35 @@ Listen/read next: sources ranked by times cited + episodes + a 30-day
 recency bonus; podcasts/shows/videos/talks are "listen", the rest "read".
 Candidate inputs only — what each was cited for is as the episodes state.
 
+## Web lookup (WP-P3)
+
+User rule (approved): "When there is no model knowledge, or the context is
+past the model's knowledge cutoff, a web lookup call is approved — but keep
+the search and the summary succinct: restrict to the 3 most authoritative
+likely sources only, unless each of those fails."
+
+| part | who |
+|---|---|
+| targets: roles whose state record has `verify` (episode month > cutoff or model flag), then people with `known: false` (or a `verify` flag), multi-word names before bare handles, most appearances first | deterministic (`select_web_targets`) |
+| never: private (model flag), unnamed / withheld / winner / attendee rows (never in the index), confident pre-cutoff model knowledge, anything already looked up | deterministic |
+| lookup: 10 targets per call, `--max-web-calls` (default 5) | model, `prompts/annotate/web_lookup.md` |
+| source budget: 3 most authoritative likely sources (official org / government record → reference work or major outlet profile → own verified profile), stop when 2 agree, 3 more only if all 3 fail | prompt; ≤3 URLs (≤6 with `fallback_used`) enforced in `normalize_web` |
+| "found" without a URL, or a role without a holder → "not_found" | deterministic |
+| a LOW-confidence identity match is never adopted as the description: the note keeps "No reliable model knowledge" and shows "Possible match, per web lookup … — low confidence, not adopted" (added after the first real call: the CLI returned a low-confidence "identified only by the name fitting the context" match) | deterministic (`_web_found`) |
+| cache: `rec["web"]` on the person / role record in `.annotate_state.json` (status, name, description, sources, confidence, fallback, agrees_with_model, looked_up_at, model); kept across `--refresh` | deterministic |
+| provenance: person heading "Description — per web lookup <date> (sources: …)", index tag "(web lookup)"; role "→ X, as of D, per web lookup <date>; sources: …" in notes, index and log; not-found noted beside "No reliable model knowledge" | deterministic |
+| verify cleared only when the lookup confirms (same holder as model knowledge, or model had none; high/medium confidence). Different holder = contradiction: state keeps the model answer, output shows the web answer with "?" + "model knowledge: X — verify" | deterministic (`apply_web_role`) |
+| stale in-notes annotation (model knowledge → web lookup) is replaced in place; digests strip both forms | deterministic |
+
+CLI call (`summarizer.complete_web_lookup`, claude CLI 2.1.306):
+`claude -p --model <alias> --system-prompt-file F --tools WebSearch,WebFetch
+--allowedTools WebSearch,WebFetch --disallowedTools Skill,Read,Bash,…
+--strict-mcp-config --output-format json`, API keys stripped, scratch cwd.
+Only `claude-cli/*` entries of `LLM_MODELS` are tried — web tools exist only
+in the CLI, so a web lookup can never reach a metered backend whatever
+`ALLOW_METERED_FALLBACK` says. Exhaustion stops the lookup (finished
+batches stay cached).
+
 ## Real run (2026-10-21)
 
 Subscription chain only (`claude-cli/opus` → `claude-cli/sonnet`,
@@ -92,3 +121,32 @@ Subscription chain only (`claude-cli/opus` → `claude-cli/sonnet`,
 - **Known interaction:** annotating a package's notes.md changes its hash, so
   a later `package` of the same episode keeps the vault copy ("user-edited")
   unless `--force`; re-run `annotate-people` after a forced re-package.
+
+## Real run — web lookup (WP-P3, 2026-10-21)
+
+`annotate-people ai_daily_brief --usd-cap 0` with `LLM_MODELS=[claude-cli/opus,
+claude-cli/sonnet]`, `ALLOW_METERED_FALLBACK=false`; first `--max-web-calls 1`
+as a smoke test, then `--max-web-calls 4`. **5 web calls** in total, all
+served by `claude-cli/opus`; 0 model-knowledge calls (nothing new).
+
+- Targets: 45 (1 post-cutoff role + 44 "no reliable model knowledge" people;
+  the 1 private person and the unnamed/winner rows were never sent).
+- People: **16 found** (high/medium, adopted with sources), **1 low-confidence
+  possible match** (shown, not adopted), **27 not found** (mostly bare
+  handles and names the notes say nothing about). 0 used the fallback; every
+  answer has ≤3 sources.
+- ASR spellings corrected by the lookup: Pavel Huran → Pawel Huryn, Liv
+  Gordon → Liv Gorton, Ellie Bukouch → Elie Bakouch, Alex Emas → Alex Imas,
+  Abi Desai → Abhi Desai, Judge Alex C → Alex G. Tse, Abdul Rahman Alphazan →
+  Abdulrahman Alfozan.
+- Role "OpenAI's CEO" (2026-10-16): **Sam Altman, high, agrees with model
+  knowledge → verify cleared**. Caveat (observed): the sentence is about the
+  late-2023 ousting, and the two sources the CLI returned are Nov 2023 news
+  pieces (aljazeera.com, wfsb.com) — they identify the person referred to,
+  not who held the role on 2026-10-16. The prompt asks for the holder on the
+  episode date; it answered the sentence instead.
+- Observed source quality: most answers came from search-result summaries
+  ("pages not opened directly"); some sources are aggregators (dealroom,
+  yespress.io, happenstance.ai). The confidence + sources are in each note,
+  so this is visible, not hidden.
+- Rerun: 0 model calls, 0 web calls, no file written. Link check: 0 problems.

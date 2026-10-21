@@ -940,6 +940,16 @@ role references ("the Secretary of State") as of the episode date, flagged
 A rerun with nothing new makes 0 calls. `--max-calls N`, `--refresh`,
 `--no-annotate-notes`. Design: `design/ANNOTATE_PEOPLE.md`.
 
+Web lookup (approved rule): only for people with "no reliable model
+knowledge" and roles flagged "verify — after model knowledge cutoff" —
+never private/unnamed rows or confident pre-cutoff knowledge. One
+subscription `claude -p` call (WebSearch + WebFetch only) per 10 targets,
+3 most authoritative sources per target (3 more only if all fail). Shown as
+"per web lookup <date> (sources: …)"; "verify" clears only on confirmation;
+contradictions are shown next to the model's answer. Cached in
+`people/.annotate_state.json` (rerun: 0 calls). `--no-web`,
+`--max-web-calls N` (default 5).
+
 ## Development
 If you want to modify the code or run tests locally, you'll need a local Python environment.
 

@@ -100,7 +100,8 @@ def test_batching_and_max_web_calls(tmp_path):
     res = ap.run(_scope(tmp_path, paths), llm, web_complete=web, max_web_calls=2, as_of=AS_OF)
     assert [len(c) for c in web.calls] == [ap.WEB_BATCH, ap.WEB_BATCH] == [10, 10]
     assert res.web["calls"] == 2 and "max-web-calls 2" in res.web["stopped"]
-    assert res.web["people"] == {"eligible": 23, "found": 0, "not_found": 20, "pending": 3}
+    assert res.web["people"] == {"eligible": 23, "found": 0, "low_confidence": 0,
+                                 "not_found": 20, "pending": 3}
     # next run: only the 3 not yet looked up, one call
     web2 = FakeWeb()
     res2 = ap.run(_scope(tmp_path, paths), FakeLLM(), web_complete=web2, as_of=AS_OF)
@@ -212,6 +213,26 @@ def test_not_found_keeps_no_knowledge_and_is_cached(tmp_path):
     web2 = FakeWeb()
     ap.run(_scope(tmp_path, paths), FakeLLM(), web_complete=web2, as_of=AS_OF)
     assert web2.calls == []
+
+
+def test_low_confidence_match_is_not_adopted(tmp_path):
+    vault, paths, llm = _setup(tmp_path, ROWS[:3], unknown={"Obscure Researcher"})
+
+    class LowWeb(FakeWeb):
+        def __call__(self, system, user):
+            text, model = super().__call__(system, user)
+            data = json.loads(text)
+            for t in data["targets"]:
+                t["confidence"] = "low"
+            return json.dumps(data), model
+    web = LowWeb({"Obscure Researcher": ("Obscure Researcha", "Obscure Researcha builds tools.", SRC[:1])})
+    res = ap.run(_scope(tmp_path, paths), llm, web_complete=web, as_of=AS_OF)
+    note = (vault / "people" / "obscure_researcher.md").read_text()
+    assert ap.NO_KNOWLEDGE in note and "description_source: none" in note
+    assert "_Possible match, per web lookup 2026-10-21 (sources: [openai.com]" in note
+    assert "low confidence, not adopted: Obscure Researcha builds tools._" in note
+    assert "Probable spelling" not in note
+    assert res.web["people"]["low_confidence"] == 1 and res.web["people"]["found"] == 0
 
 
 def test_private_never_looked_up_even_if_unknown(tmp_path):
