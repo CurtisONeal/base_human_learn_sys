@@ -1,7 +1,8 @@
 """Summary prompt variants, for A/B tests on the same transcript.
 
 ``current`` — the prompts with the People section (core/people.py,
-prompts/fragments/people.md). ``legacy`` — exactly the prompts on main
+prompts/fragments/people.md) and the Sources Referenced section
+(core/cited_sources.py, prompts/fragments/sources.md). ``legacy`` — exactly the prompts on main
 before it (7fcd1d7): no People section anywhere, byte-identical rendered
 system prompts (guarded by tests/fixtures/prompt_variants/).
 
@@ -44,4 +45,9 @@ def has_people(variant: Optional[str] = None) -> bool:
     return normalize(variant or active()) == CURRENT
 
 
-__all__ = ["CURRENT", "LEGACY", "active", "has_people", "normalize", "set_active"]
+def has_sources(variant: Optional[str] = None) -> bool:
+    """The Sources Referenced section (core/cited_sources.py, WP-P2): variant "current"."""
+    return normalize(variant or active()) == CURRENT
+
+
+__all__ = ["CURRENT", "LEGACY", "active", "has_people", "has_sources", "normalize", "set_active"]

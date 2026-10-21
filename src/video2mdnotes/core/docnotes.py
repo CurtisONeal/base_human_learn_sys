@@ -163,6 +163,9 @@ class Consolidated:
     people_sections: int = 0
     people_in: int = 0
     people_out: int = 0
+    sources_sections: int = 0
+    sources_in: int = 0
+    sources_out: int = 0
     log: List[str] = field(default_factory=list)
 
 
@@ -197,10 +200,13 @@ def split_terms(text: str) -> Tuple[str, List[str], int]:
 
 
 def consolidate(text: str, extra_terms: Iterable[str] = (), *, people: bool = False,
-                extra_people: Iterable = ()) -> Consolidated:
+                extra_people: Iterable = (), sources: bool = False,
+                extra_sources: Iterable = ()) -> Consolidated:
     """One Overview (the first) and one Key terms section (merged, at the end);
-    with `people`, one People section (merged) right before Key terms."""
+    with `people`, one People section (merged) right before Key terms; with
+    `sources`, one Sources Referenced section (merged) after People."""
     from video2mdnotes.core import people as people_mod
+    from video2mdnotes.core import cited_sources as sources_mod
 
     extra_terms = list(extra_terms)
     people_md = ""
@@ -211,6 +217,15 @@ def consolidate(text: str, extra_terms: Iterable[str] = (), *, people: bool = Fa
         merged_people = people_mod.merge_people(rows, timed=False)
         people_md = people_mod.render(merged_people, level=2, documents=True)
         people_counts = (n_people, len(rows), len(merged_people))
+    sources_md = ""
+    sources_counts = (0, 0, 0)
+    if sources:
+        text, srows, n_sources = sources_mod.split_sources(text)
+        srows = srows + list(extra_sources)
+        names = [n for p in (merged_people if people else []) for n in [p.shown, *p.names]]
+        merged_sources, _ = sources_mod.merge_sources(srows, timed=False, people_names=names)
+        sources_md = sources_mod.render(merged_sources, level=2, documents=True)
+        sources_counts = (n_sources, len(srows), len(merged_sources))
     body, entries, n_sections = split_terms(text)
     lines = body.split("\n")
     heads = headings(lines)
@@ -223,6 +238,7 @@ def consolidate(text: str, extra_terms: Iterable[str] = (), *, people: bool = Fa
                           overviews_dropped=len(drop))
     result.term_sections = n_sections
     result.people_sections, result.people_in, result.people_out = people_counts
+    result.sources_sections, result.sources_in, result.sources_out = sources_counts
     all_entries = entries + extra_terms
     merged = merge_terms(all_entries)
     result.terms_in, result.terms_out = len(all_entries), len(merged)
@@ -230,6 +246,8 @@ def consolidate(text: str, extra_terms: Iterable[str] = (), *, people: bool = Fa
     out = re.sub(r"\n{3,}", "\n\n", out)
     if people_md:
         out += "\n\n" + people_md.rstrip()
+    if sources_md:
+        out += "\n\n" + sources_md.rstrip()
     if merged:
         out += f"\n\n{KEY_TERMS_HEADING}\n\n" + "\n".join(merged)
     result.text = out.strip() + "\n"

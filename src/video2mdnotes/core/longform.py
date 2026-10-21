@@ -52,6 +52,7 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 from video2mdnotes.config import BASE_DIR
 from video2mdnotes.core import (
     citations, consistency, domains, names, notes_format, outline as outline_mod, people,
+    cited_sources,
     quality, spoken_dates, summarizer, variants,
 )
 from video2mdnotes.core.chunking import DEFAULT_MAX_WORDS
@@ -70,6 +71,7 @@ MISHEARING_FRAGMENT = PROMPT_DIR / "fragments" / "mishearing_hint.md"
 LEDGER_FRAGMENT = PROMPT_DIR / "fragments" / "ledger.md"
 MULTI_CHAPTER_FRAGMENT = PROMPT_DIR / "fragments" / "multi_chapter.md"
 PEOPLE_FRAGMENT = PROMPT_DIR / "fragments" / "people.md"
+SOURCES_FRAGMENT = PROMPT_DIR / "fragments" / "sources.md"
 
 OVERLAP_S = 150.0
 LEDGER_MAX_WORDS = 800
@@ -96,7 +98,9 @@ FACT_CHECKED = "Fact-Checked Notes"
 # Prompt variant "current": every passage writes a People table; assembly
 # merges them into ONE `## People` section (core/people.py).
 PEOPLE = people.HEADING
-CROSS_SECTIONS = (UNCERTAINTY, TIME_SENSITIVE, FACT_CHECKED, PEOPLE)
+# ... and a Sources Referenced table, merged into ONE section (core/cited_sources.py).
+SOURCES = cited_sources.HEADING
+CROSS_SECTIONS = (UNCERTAINTY, TIME_SENSITIVE, FACT_CHECKED, PEOPLE, SOURCES)
 
 CompleteFn = Callable[[str, str], Tuple[str, str]]
 Progress = Callable[[str], None]
@@ -516,6 +520,8 @@ def passage_system_prompt(plan: Plan) -> str:
         mishearing_hint(plan.provenance, plan.glossary).rstrip(),
         (PEOPLE_FRAGMENT.read_text(encoding="utf-8").rstrip()
          if variants.has_people(variant) else ""),
+        (SOURCES_FRAGMENT.read_text(encoding="utf-8").rstrip()
+         if variants.has_sources(variant) else ""),
         LEDGER_FRAGMENT.read_text(encoding="utf-8").rstrip(),
         quality.uncertainty_prompt_block().rstrip(),
         notes_format.time_sensitive_fragment(plan.meta).rstrip(),
@@ -1429,6 +1435,7 @@ def _standard_headings() -> set:
     if _STANDARD_HEADINGS is None:
         names = {h for prof in domains.LONGFORM_SECTIONS.values() for h, _ in prof}
         names.add(domains.PEOPLE_SECTION[0])
+        names.add(domains.SOURCES_SECTION[0])
         _STANDARD_HEADINGS = {_norm(h) for h in names} | {"part"}
     return _STANDARD_HEADINGS
 
@@ -1925,6 +1932,28 @@ def merge_people_section(plan: Plan, notes_by_key: Dict[str, str],
                 "names": [p.shown for p in merged]}, merged
 
 
+def merge_sources_section(plan: Plan, notes_by_key: Dict[str, str],
+                          people_names: Sequence[str] = ()) -> Tuple[str, dict]:
+    """ONE `## Sources Referenced` section from every passage's table
+    (core/cited_sources.py): same source once, citations unioned in time order;
+    a row naming a person of the People table is dropped (people are not
+    sources)."""
+    rows: List[cited_sources.SourceRow] = []
+    missing = 0
+    for p in plan.passages:
+        body = section_body(notes_by_key[p.key], SOURCES)
+        if body is None:
+            missing += 1
+            continue
+        rows.extend(cited_sources.parse_rows(body, start_order=len(rows)))
+    merged, info = cited_sources.merge_sources(rows, timed=True, people_names=people_names)
+    md = cited_sources.render(merged, level=2)
+    if missing:
+        md = md.rstrip("\n") + (f"\n\n> {missing} passage(s) returned no {SOURCES} section.\n")
+    info.update({"passages_without": missing, "names": [s.shown for s in merged]})
+    return md, info
+
+
 MODEL_KNOWLEDGE = "per model knowledge (cutoff uncertain)"
 
 
@@ -2105,6 +2134,11 @@ def assemble(plan: Plan, notes_by_key: Dict[str, str], course_map_md: str,
     if variants.has_people(plan.prompt_variant):
         people_md, people_info, merged_people = merge_people_section(plan, notes_by_key, private)
         blocks.append(people_md)
+    sources_info = None
+    if variants.has_sources(plan.prompt_variant):
+        person_names = [n for pr in merged_people for n in [pr.shown, *pr.names]]
+        sources_md, sources_info = merge_sources_section(plan, notes_by_key, person_names)
+        blocks.append(sources_md)
     uncertainty_md, uncertainty_info = _merge_uncertainty(
         plan, notes_by_key, private, people.names_for_table(merged_people))
     hedged_total = 0
@@ -2171,6 +2205,7 @@ def assemble(plan: Plan, notes_by_key: Dict[str, str], course_map_md: str,
         "uncertainty": uncertainty_info,
         "prompt_variant": plan.prompt_variant,
         **({"people": people_info} if people_info is not None else {}),
+        **({"sources": sources_info} if sources_info is not None else {}),
         "time_sensitive_rows": len(check.rows),
         "time_sensitive_dropped": ts_dropped,
         "recorded_estimate": recorded.as_dict() if recorded else None,

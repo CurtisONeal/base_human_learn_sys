@@ -54,7 +54,7 @@ CompleteFn = Callable[[str, str], Tuple[str, str]]
 
 # Sections that never hold a statement worth comparing.
 SKIP_SECTIONS = ("key concepts", "people", "commands", "transcription uncertainty", "fact checked",
-                 "fact-checked")
+                 "fact-checked", "sources referenced")
 TIME_SENSITIVE = "time-sensitive claims"
 
 OUTCOME_RE = re.compile(

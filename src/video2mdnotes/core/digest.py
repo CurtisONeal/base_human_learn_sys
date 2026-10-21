@@ -73,7 +73,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import unquote
 
 from video2mdnotes.config import BASE_DIR
-from video2mdnotes.core import notes_format, people as people_mod
+from video2mdnotes.core import cited_sources, notes_format, people as people_mod
 from video2mdnotes.core.package import (_LINK_RE, anchor_matches, link_path, obsidian_anchor,
                                         youtube_id)
 
@@ -88,6 +88,7 @@ EPISODE_MAX_CHARS = 16_000
 CITE_TOLERANCE_S = 30
 TOP_STORIES_MAX = 8
 PEOPLE_MAX = 25
+SOURCES_MAX = 30
 TERMS_MAX = 40
 
 CompleteFn = Callable[[str, str], Tuple[str, str]]
@@ -200,6 +201,7 @@ class Episode:
     label: str = ""                   # E1, E2 … within one span
     timestamps: List[float] = field(default_factory=list)
     people_rows: List[people_mod.PersonRow] = field(default_factory=list)
+    source_rows: List[cited_sources.SourceRow] = field(default_factory=list)
     terms: List[Term] = field(default_factory=list)
     claims: List[notes_format.ClaimRow] = field(default_factory=list)
     sha: str = ""
@@ -262,6 +264,8 @@ def load_episode(notes_path: Path) -> Optional[Episode]:
         bare = _bare(h).lower()
         if bare == "people" and lv == 2:
             ep.people_rows.extend(people_mod.parse_rows(text))
+        elif bare == cited_sources.HEADING.lower() and lv == 2:
+            ep.source_rows.extend(cited_sources.parse_rows(text))
         elif bare.startswith("key concepts"):
             for line in text.split("\n"):
                 m = _TERM.match(line)
@@ -853,6 +857,8 @@ def render(span: Span, v: Dict[str, Any], chk: Check, claims: Sequence[ClaimRef]
             md.append(f"\n_{len(scored) - PEOPLE_MAX} more people appear in the episode notes._")
         md.append("")
 
+    md += render_sources(span, eps, out_dir)
+
     # Key terms new this span.
     seen: Dict[str, Tuple[Term, Episode]] = {}
     counts: Dict[str, int] = {}
@@ -931,6 +937,55 @@ def render(span: Span, v: Dict[str, Any], chk: Check, claims: Sequence[ClaimRef]
         md.append(f"  - dropped: {d}")
     md += ["- Links: LINKSUMMARY", ""]
     return "\n".join(fm) + "\n" + "\n".join(md)
+
+
+def merge_span_sources(eps: Sequence[Episode]) -> List[Tuple[cited_sources.Source, List[str], int]]:
+    """Every episode's Sources Referenced rows merged across the span:
+    [(source, episode labels, times cited)], ranked by episodes, then times
+    cited, then first episode. Deterministic; no model call."""
+    rows: List[cited_sources.SourceRow] = []
+    order = 0
+    for e in eps:
+        for r in e.source_rows:
+            cites = [f"{e.label} {hms(parse_ts(c))}" for c in r.cites if parse_ts(c) is not None]
+            rows.append(cited_sources.SourceRow(r.name, r.type, r.cited_by, r.cited_for, r.date,
+                                                cites or [f"{e.label} -"], order))
+            order += 1
+    merged, _ = cited_sources.merge_sources(rows, timed=False)
+    out = []
+    for s in merged:
+        labs = sorted({c.split()[0] for r in s.rows for c in r.cites},
+                      key=lambda x: int(x[1:]))
+        times = len({c for r in s.rows for c in r.cites if not c.endswith(" -")}) or len(s.rows)
+        out.append((s, labs, times))
+    out.sort(key=lambda x: (-len(x[1]), -x[2], min(r.order for r in x[0].rows)))
+    return out
+
+
+def render_sources(span: Span, eps: Sequence[Episode], out_dir: Path) -> List[str]:
+    """`## Sources of the week|month`: outside sources the episodes cite,
+    merged with counts and episode links (WP-P2)."""
+    md = [f"## Sources of the {span.kind}", "",
+          "_Outside sources the episodes cite (outlets, podcasts, papers, reports, posts …), "
+          "merged across episodes and ranked by how many episodes cite them, then how often. "
+          "As stated in the episode notes; people are in the People table._", ""]
+    merged = merge_span_sources(eps)
+    if not merged:
+        return md + ["- None identified in the episodes.", ""]
+    md += ["| source | type | episodes | times cited | cited by | cited for | citations |",
+           "|---|---|---|---:|---|---|---|"]
+    by_label = {e.label: e for e in eps}
+    for s, labs, times in merged[:SOURCES_MAX]:
+        cites = [r for c in s.cites if (r := resolve_cite(c, by_label))]
+        ep_links = ", ".join(f"[{lab}]({_rel(by_label[lab].notes_path, out_dir)})"
+                             for lab in labs)
+        md.append("| " + " | ".join(_clean_cell(x) for x in (
+            s.shown, s.type or "-", ep_links, str(times), s.cited_by or "-",
+            s.cited_for or "-", fmt_cites(cites) or "-")) + " |")
+    if len(merged) > SOURCES_MAX:
+        md.append(f"\n_{len(merged) - SOURCES_MAX} more sources appear in the episode notes._")
+    md.append("")
+    return md
 
 
 def check_digest_links(text: str, out_dir: Path, episodes: Sequence[Episode]) -> List[str]:

@@ -609,15 +609,45 @@ _DOC_PEOPLE_RULES = """- Columns, in this order:
 - If no one qualifies, write the header row, the separator row and `- None`.
 """
 
+# ... and a Sources Referenced table (WP-P2, core/cited_sources.py): the outside
+# works the text cites — never people — merged into ONE section after People.
+_DOC_SOURCES_RULES = """- Columns, in this order:
+  `| source | type | cited by | cited for | date / edition | locators |`
+- One row per outside source the text cites, quotes or relies on: outlets
+  and publications, newsletters, blogs, podcasts and shows, papers, reports,
+  books, posts, datasets, surveys, videos, talks, company documents.
+- source: the name as the text gives it — never expanded or corrected from
+  your own knowledge.
+- type: outlet, newsletter, blog, podcast, show, paper, report, book, post,
+  dataset, survey, video, talk, announcement, filing or other.
+- cited by: who cites it in this text, by role (author, speaker, interviewee
+  …). Names belong in People.
+- cited for: one sentence — the claim, finding, number or quote it is cited
+  for, attributed. date / edition: only what the text states, else `-`.
+- locators: the bracketed locators where it is cited, up to four.
+- People are not sources: a person goes in People. A person's own podcast,
+  newsletter, paper or book IS a source (and the person stays in People).
+- No outside knowledge, except one short clause labelled `(per model
+  knowledge)` when it is essential to identify the source.
+- If the text cites no outside source, write the header row, the separator
+  row and `- None`.
+"""
+
 _CHUNK_SYSTEM = _CHUNK_SYSTEM_LEGACY.replace(
     "KEY TERMS (WP-D1):",
     "PEOPLE:\n- Before the key terms, add a `#### People` heading and a table of the\n"
-    "  people in this passage.\n" + _DOC_PEOPLE_RULES + "\nKEY TERMS (WP-D1):")
+    "  people in this passage.\n" + _DOC_PEOPLE_RULES
+    + "\nSOURCES REFERENCED:\n- After People, add a `#### Sources Referenced` heading and a\n"
+    "  table of the outside sources this passage cites.\n" + _DOC_SOURCES_RULES
+    + "\nKEY TERMS (WP-D1):")
 _WHOLE_SYSTEM = _WHOLE_SYSTEM_LEGACY.replace(
     "- Last: `## Key terms`",
     "- Then `## People`, immediately before Key terms: a table of the people\n"
     "  in the document.\n" + "\n".join("  " + ln if ln.strip() else ln
                                        for ln in _DOC_PEOPLE_RULES.rstrip().split("\n"))
+    + "\n- Then `## Sources Referenced`, after People: a table of the outside\n"
+    "  sources the document cites.\n" + "\n".join("  " + ln if ln.strip() else ln
+                                                 for ln in _DOC_SOURCES_RULES.rstrip().split("\n"))
     + "\n- Last: `## Key terms`")
 assert _CHUNK_SYSTEM != _CHUNK_SYSTEM_LEGACY and _WHOLE_SYSTEM != _WHOLE_SYSTEM_LEGACY
 
@@ -763,13 +793,17 @@ def _write_overview(title: str, topics: str) -> tuple[str, str | None, str | Non
 _BRACKETS = re.compile(r"\s*\[[^\]]*\]")
 
 
-def _finish_notes(text: str, label: str, extra_terms=(), extra_people=()) -> tuple[str, dict]:
-    """One Overview, one merged People (variant "current"), one merged Key
-    terms, balanced code fences. Deterministic."""
+def _finish_notes(text: str, label: str, extra_terms=(), extra_people=(),
+                  extra_sources=()) -> tuple[str, dict]:
+    """One Overview, one merged People and one merged Sources Referenced
+    (variant "current"), one merged Key terms, balanced code fences.
+    Deterministic."""
     from video2mdnotes.core import docnotes, fences, variants
 
     done = docnotes.consolidate(text, extra_terms, people=variants.has_people(),
-                                extra_people=extra_people)
+                                extra_people=extra_people,
+                                sources=variants.has_sources(),
+                                extra_sources=extra_sources)
     fixed, repairs = fences.repair_fences(done.text, label=label)
     info = {
         "overviews": max(done.overviews_found - done.overviews_dropped, 0),
@@ -777,6 +811,7 @@ def _finish_notes(text: str, label: str, extra_terms=(), extra_people=()) -> tup
         "key_terms_in": done.terms_in, "key_terms_out": done.terms_out,
         "key_term_lists_merged": done.term_sections,
         "people_rows_in": done.people_in, "people_out": done.people_out,
+        "sources_rows_in": done.sources_in, "sources_out": done.sources_out,
         "fence_repairs": repairs,
     }
     return fixed, info
@@ -855,7 +890,9 @@ def summarize_document(source, max_words: int = None, progress=None) -> SummaryR
         final, info = _finish_notes(output, label)
     else:
         from video2mdnotes.core import people as people_mod
+        from video2mdnotes.core import cited_sources as sources_mod
         notes: list[str] = []
+        passage_sources: list = []
         passage_terms: list[str] = []
         passage_people: list = []
         for chunk in chunks:
@@ -875,6 +912,8 @@ def summarize_document(source, max_words: int = None, progress=None) -> SummaryR
                 passage_terms.extend(terms)
                 body, rows, _ = people_mod.split_people(body)
                 passage_people.extend(rows)
+                body, srows, _ = sources_mod.split_sources(body)
+                passage_sources.extend(srows)
                 notes.append(f"### [{chunk.locator}] {' > '.join(chunk.heading_path)}\n"
                              f"{body.strip()}")
 
@@ -932,7 +971,7 @@ def summarize_document(source, max_words: int = None, progress=None) -> SummaryR
                     f"the reduce returned {len(topics.split())} words from "
                     f"{sum(len(n.split()) for n in passage_notes)} words of passage "
                     f"notes — it chatted or truncated instead of assembling"
-                ), label, passage_terms, passage_people)
+                ), label, passage_terms, passage_people, passage_sources)
             else:
                 overview, model, why = _write_overview(source.title, topics)
                 if model:
@@ -943,14 +982,14 @@ def summarize_document(source, max_words: int = None, progress=None) -> SummaryR
                 assembled = (f"# {source.title}\n\n## Overview\n\n{overview}\n\n"
                              f"{topics.strip()}\n")
                 final, info = _finish_notes(assembled, label, passage_terms + reduce_terms,
-                                            passage_people)
+                                            passage_people, passage_sources)
                 if why:
                     info["overview_fallback"] = why
         except (SubscriptionExhausted, BudgetExhausted):
             raise
         except Exception as exc:  # noqa: BLE001 - keep the work that succeeded
             final, info = _finish_notes(_fallback(str(exc)[:200]), label, passage_terms,
-                                        passage_people)
+                                        passage_people, passage_sources)
 
     repairs = info.get("fence_repairs") or []
     provenance = (

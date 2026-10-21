@@ -243,6 +243,14 @@ PEOPLE_SECTION = ("People",
                   "discussed, their role here, background as stated, relevance. Cited.")
 
 
+# ... and Sources Referenced right after People (WP-P2): outlets, shows,
+# papers, reports, posts the source cites — never people.
+SOURCES_SECTION = ("Sources Referenced",
+                   "The table described under Sources Referenced below: outside "
+                   "sources cited (outlets, podcasts, papers, reports, posts …), who "
+                   "cites them, for what. Cited.")
+
+
 def longform_sections(profile: str, variant: Optional[str] = None) -> List[tuple]:
     """(heading, instruction) pairs for one long-form profile, in output order."""
     from video2mdnotes.core import variants
@@ -250,4 +258,6 @@ def longform_sections(profile: str, variant: Optional[str] = None) -> List[tuple
     if variants.has_people(variant):
         k = next((i for i, (h, _) in enumerate(out) if h.startswith("Key Concepts")), 0)
         out.insert(k + 1, PEOPLE_SECTION)
+    if variants.has_sources(variant):
+        out.insert(out.index(PEOPLE_SECTION) + 1, SOURCES_SECTION)
     return out
