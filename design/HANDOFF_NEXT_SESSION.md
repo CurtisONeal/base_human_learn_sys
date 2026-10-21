@@ -40,3 +40,9 @@ Start here, then `design/LONGFORM_RESUME.md` (current track) and `design/LONGFOR
 ## Open items for the user
 - Push `main`. Replace old unlinked inbox copies (`000_inbox_new_notes/longform_notes_2026-10-16/`) with a pointer note? Re-summarize SC-900 (≈7 calls) to remove its duplicate Overview? Meetup YouTube links (re-point meetup citations once talks are posted; talk splits in `previous_run_results/E3e_cle_ai_meetup/talk_splits.md`). Tony/Ireland cassette file not found (ask name/drive).
 - Parked: compare `raiyanyahya/how-to-train-your-gpt` vs Karpathy notes; learning-plan (Curriculum Maker v4) integration plan in HUMAN_PLANS.md.
+
+## Update 2026-10-21 (context ~91 %)
+- Stages 1–3 merged into local `main` (847 pass; 15 commits unpushed — user pushes). Collection `ai_daily_brief` exists (`previous_run_results/collections/ai_daily_brief/`), last-7-days run done, digests 2026-W42/W43 in the vault.
+- IN FLIGHT: WP-P2 agent — `## Sources Referenced` section (current prompt variant, generalized across media/docs, merged, into digests), `annotate-people` agentic command (person index + minimal training-knowledge bios + vague-role resolution as of episode date + sources index as listen/read-next queue), P6 evaluator fix (ignore Transcription Uncertainty). Real test on FSX5JFJS9PQ + W43 digest + annotate on W42/W43. When done: review, merge into main locally, test, report; then pattern-harvest.
+- Skills repo `~/Documents/agent_set_up/repos/claude-work-patterns` v0.1.2 (local; user pushes). Vault note: `010_learning_system/references/claude/Claude Code work patterns and skills.md`.
+- Open: phone not showing new vault notes — user checking Mac Sync remote/status (possible side effect of disconnecting the decoy `reports` vault).
