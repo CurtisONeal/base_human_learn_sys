@@ -32,8 +32,10 @@ Column rules:
 - **person** — the name as the source gives it. When the transcript is
   machine-made, use its most frequent spelling and add `(ASR spelling)` after
   the name, unless the name appears in the source title, description or tags.
-  Never "correct" a name to a spelling the audio cannot distinguish. A speaker
-  who is never named is described by role, e.g. `Unnamed host`.
+  Never "correct" a name to a spelling the audio cannot distinguish. A host or
+  speaker the recording never names, but the SOURCE DESCRIPTION does (e.g.
+  "NLW traces …"), gets that name followed by `(per source description)`. A
+  speaker named nowhere is described by role, e.g. `Unnamed host`.
 - **role** — the person's role IN THIS SOURCE, not their job title: one of
   host, co-host, interviewer, guest, interviewee, speaker, panelist,
   moderator, person discussed, quoted, cited author (two joined with ` / `

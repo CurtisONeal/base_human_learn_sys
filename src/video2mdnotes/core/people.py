@@ -199,6 +199,12 @@ def _same(a: str, b: str, asr: bool, aliases: Dict[str, str]) -> bool:
         return False
     if ka == kb:
         return True
+    ca, cb = ka.replace(" ", ""), kb.replace(" ", "")
+    if ca == cb:                         # "Claire Vaux" / "ClaireVaux"
+        return True
+    if asr and len(ca) >= 6 and names_mod.sounds_alike(ca, cb) and (
+            len(ka.split()) == 1 or len(kb.split()) == 1):
+        return True                      # "Claire Vaux" / "Clairvaux" (ASR)
     if aliases.get(ka) and aliases.get(ka) == aliases.get(kb):
         return True
     ta, tb = ka.split(), kb.split()
@@ -341,7 +347,8 @@ def merge_people(rows: Sequence[PersonRow], *, asr: bool = False, timed: bool = 
                     -bares.index(n))
         g.shown = max(bares, key=score) if bares else g.names[0]
         if asr:
-            g.also = [n for n in bares if n != g.shown and len(n.split()) == len(g.shown.split())]
+            shown_toks = set(name_key(g.shown).split())
+            g.also = [n for n in bares if n != g.shown and name_key(n) not in shown_toks]
         g.role = _merge_role([r.role for r in g.rows]) or "person discussed"
         bg = _richest([r.background for r in g.rows])
         if not bg:
@@ -365,9 +372,18 @@ def merge_people(rows: Sequence[PersonRow], *, asr: bool = False, timed: bool = 
 # --- rendering -------------------------------------------------------------------------
 
 
-def display_name(p: Person, *, asr: bool, meta_words: Optional[set] = None) -> str:
+def looks_like_name(name: str, is_common: Optional[Callable[[str], bool]] = None) -> bool:
+    """Capitalised words that are not ordinary words ("The president" is a role)."""
+    toks = bare_name(name).split()
+    if not toks or any(not t[:1].isupper() for t in toks):
+        return False
+    return not (is_common and any(is_common(t) for t in toks))
+
+
+def display_name(p: Person, *, asr: bool, meta_words: Optional[set] = None,
+                 is_common: Optional[Callable[[str], bool]] = None) -> str:
     name = p.shown
-    if name_key(name).startswith("unnamed"):
+    if name_key(name).startswith("unnamed") or not looks_like_name(name, is_common):
         return name
     if asr and not (meta_words and names_mod.in_metadata(name, meta_words)):
         hedge = names_mod.HEDGE
@@ -387,7 +403,7 @@ INTRO = ("_Who takes part in or is discussed in this source, as the source prese
 
 def render(people: Sequence[Person], *, level: int = 2, asr: bool = False,
            meta_words: Optional[set] = None, documents: bool = False,
-           intro: bool = True) -> str:
+           intro: bool = True, is_common: Optional[Callable[[str], bool]] = None) -> str:
     from video2mdnotes.core.notes_format import sanitize_cell as cell
     cols = DOC_COLUMNS if documents else COLUMNS
     out = ["#" * level + " " + HEADING, ""]
@@ -399,7 +415,8 @@ def render(people: Sequence[Person], *, level: int = 2, asr: bool = False,
     out += ["| " + " | ".join(cols) + " |", "|" + "---|" * len(cols)]
     for p in people:
         out.append("| " + " | ".join(cell(x) for x in (
-            display_name(p, asr=asr, meta_words=meta_words), p.role, p.background,
+            display_name(p, asr=asr, meta_words=meta_words, is_common=is_common),
+            p.role, p.background,
             p.relevance or "-", " ".join(p.cites) or "-")) + " |")
     return "\n".join(out) + "\n"
 

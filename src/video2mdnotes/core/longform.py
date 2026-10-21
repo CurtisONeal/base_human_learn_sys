@@ -539,6 +539,27 @@ def overlap_tail(plan: Plan, prev: Passage, seconds: float = OVERLAP_S) -> str:
     return timestamped_lines(plan.segments, k, b)
 
 
+DESCRIPTION_MAX_CHARS = 1000
+_URL_LINE = re.compile(r"https?://|www\.|\.(?:com|ai|io|link)/", re.I)
+
+
+def description_block(plan: Plan) -> str:
+    """Variant "current": the publisher's description, so the People table can
+    name a host the recording never names (AI Daily Brief: "NLW" is only in
+    the description). Link lines dropped, capped; labelled context only."""
+    if not variants.has_people(getattr(plan, "prompt_variant", variants.CURRENT)):
+        return ""
+    desc = (getattr(plan.meta, "description", "") or "").strip()
+    lines = [ln.strip() for ln in desc.splitlines() if ln.strip() and not _URL_LINE.search(ln)]
+    text = " ".join(" ".join(lines).split())
+    if not text:
+        return ""
+    if len(text) > DESCRIPTION_MAX_CHARS:
+        text = text[:DESCRIPTION_MAX_CHARS].rsplit(" ", 1)[0] + " …"
+    return ("SOURCE DESCRIPTION (the publisher's text — context only: use it to identify "
+            "and spell people, never summarize it or cite it):\n" + text)
+
+
 def render_passage_prompt(
     plan: Plan,
     passage: Passage,
@@ -556,6 +577,7 @@ def render_passage_prompt(
 
     blocks = [
         f"SOURCE: {prompt_header(plan.meta, plan.provenance_label)}",
+        *([d] if (d := description_block(plan)) else []),
         "COURSE SKELETON (the whole recording; context only):\n" + plan.skeleton,
         f"THIS PASSAGE: {where}.",
     ]
@@ -622,6 +644,7 @@ def render_pack_prompt(plan: Plan, pack: Sequence[Passage]) -> PassagePrompt:
                     else "(no transcript lines in this chapter)")
     blocks = [
         f"SOURCE: {prompt_header(plan.meta, plan.provenance_label)}",
+        *([d] if (d := description_block(plan)) else []),
         "COURSE SKELETON (the whole recording; context only):\n" + plan.skeleton,
         f"THIS PASSAGE: {_pack_where(pack)}.",
         "Write one block per chapter, in this order, each opening with its marker "
@@ -1894,7 +1917,8 @@ def merge_people_section(plan: Plan, notes_by_key: Dict[str, str],
     merged = people.merge_people(
         rows, asr=asr, timed=True, meta_words=meta_words,
         count=(vocab.count if vocab else None), aliases=aliases, private=private)
-    md = people.render(merged, level=2, asr=asr, meta_words=meta_words)
+    md = people.render(merged, level=2, asr=asr, meta_words=meta_words,
+                       is_common=(vocab.common_word if vocab else None))
     if missing:
         md = md.rstrip("\n") + (f"\n\n> {missing} passage(s) returned no {PEOPLE} section.\n")
     return md, {"rows_in": len(rows), "people": len(merged), "passages_without": missing,

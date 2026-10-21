@@ -215,3 +215,26 @@ def test_document_people_merged_once_before_key_terms():
     assert "The chapter about teams." in docnotes.consolidate(topic, people=True).text
     # legacy: no People handling at all
     assert docnotes.consolidate(text).text.count("People") == 2
+
+
+def test_asr_one_word_spelling_merges_and_role_words_are_not_hedged():
+    rows = people.parse_rows(_table(
+        ("Claire Vaux (ASR spelling)", "quoted", "content creator", "Hates Opus V.", "[0:22:35]"),
+        ("Clairvaux (ASR spelling)", "quoted", "content creator", "Calls Muse delightful.",
+         "[0:26:07]"),
+        ("The president", "person discussed", "US president", "Confirmed the gift.", "[0:01:54]")))
+    merged = people.merge_people(rows, asr=True)
+    assert sorted(p.shown for p in merged) == ["Claire Vaux", "The president"]
+    md = people.render(merged, asr=True, is_common=lambda w: w.lower() in {"the", "president"})
+    assert "| The president |" in md
+    assert "Claire Vaux (ASR spelling; also heard as Clairvaux)" in md
+
+
+def test_description_block_only_in_current(small_run):
+    variants.set_active("current")
+    plan = lf.build_plan(small_run, write=False)
+    p = plan.passages[0]
+    assert "SOURCE DESCRIPTION" in lf.render_passage_prompt(plan, p).user
+    variants.set_active("legacy")
+    plan = lf.build_plan(small_run, write=False)
+    assert "SOURCE DESCRIPTION" not in lf.render_passage_prompt(plan, p).user
