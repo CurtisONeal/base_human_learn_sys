@@ -1546,13 +1546,133 @@ def package_cmd(
         raise typer.Exit(1)
 
 
+@app.command("playlist-index")
+def playlist_index_cmd(
+    url: str = typer.Argument(..., help="Playlist URL"),
+    out: Path = typer.Option(..., "--out", help="The index note to write (.md), e.g. "
+                             "<vault>/010_learning_system/by_subject/<subject>/_index.md"),
+    cache: Path = typer.Option(None, "--cache", help="Metadata cache (default "
+                               "OUTPUT_DIR/_playlist_cache/<playlist_id>.json)"),
+    max_fetches: int = typer.Option(None, "--max-fetches",
+                                    help="Fetch at most N new entries this run (batches; "
+                                         "rerun to continue). Default: all missing"),
+    no_fetch: bool = typer.Option(False, "--no-fetch",
+                                  help="Flat listing + cache only: no per-entry request"),
+    subject: str = typer.Option(None, "--subject", help="Package subject whose packages mark "
+                                "episodes done (default: the --out folder name when it is "
+                                "under LEARNING_ROOT)"),
+    runs_root: Path = typer.Option(None, "--runs-root",
+                                   help="Where run dirs with notes are found (default OUTPUT_DIR)"),
+    delay: float = typer.Option(1.0, "--delay", help="Seconds between metadata requests (+ jitter)"),
+):
+    """Index every episode of a playlist into one Obsidian note. Free: no model call.
+
+        playlist-index https://www.youtube.com/playlist?list=… --out <vault>/…/ai_daily_brief/_index.md
+
+    Flat listing (id, title, duration; seconds) plus one polite, cached
+    watch-page read per episode for its date and description. Resumable:
+    rerun to fetch only what is missing (new episodes, interrupted runs).
+    """
+    from video2mdnotes.core import playlist_index as pi
+
+    t0 = time.monotonic()
+    out = Path(out).expanduser()
+    root = Path(runs_root).expanduser() if runs_root else settings.output_dir
+    cache_root = settings.output_dir / "_playlist_cache"
+    res = pi.build_index(
+        url, Path(cache).expanduser() if cache else None, cache_root=cache_root,
+        max_fetches=0 if no_fetch else max_fetches, delay=delay,
+        progress=lambda m: console.print(f"[dim]{m}[/dim]", highlight=False))
+    subject_dir = None
+    learning = (settings.obsidian_vault / settings.learning_root).resolve()
+    if subject:
+        subject_dir = learning / subject
+    elif out.parent.resolve().parent == learning:
+        subject_dir = out.parent
+    pi.apply_status(res, out, subject_dir, root)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(pi.render_index(res), encoding="utf-8")
+    done = sum(1 for e in res.entries if e.status in ("notes", "packaged"))
+    console.print(
+        f"[green]Index:[/green] {out}\n"
+        f"{len(res.entries)} entries ({res.unavailable} missing from the listing, "
+        f"{res.gone} private/removed) · {res.dated} dated "
+        f"({res.from_cache} from cache, {res.fetched} fetched now, {res.fetch_failed} failed) · "
+        f"{done} with notes · listing {res.list_seconds:.1f}s, fetching {res.fetch_seconds:.0f}s, "
+        f"total {time.monotonic() - t0:.0f}s"
+        + (f"\nStopped: {res.stopped}" if res.stopped else "")
+        + f"\nCache: {res.cache_path}", highlight=False)
+
+
+@app.command("digest")
+def digest_cmd(
+    collection: str = typer.Option(..., "--collection",
+                                   help="Directory of episode notes (packages or run dirs), or a "
+                                        "subject name under OBSIDIAN_VAULT/LEARNING_ROOT"),
+    by: str = typer.Option("week", "--by", help="week (ISO, Mon–Sun) or month"),
+    since: str = typer.Option(None, "--since", help="Only episodes published on/after YYYY-MM-DD"),
+    until: str = typer.Option(None, "--until", help="Only episodes published on/before YYYY-MM-DD"),
+    out: Path = typer.Option(None, "--out", help="Digest folder (default <collection>/digests)"),
+    on_exhaustion: str = typer.Option(None, "--on-exhaustion"),
+    usd_cap: float = typer.Option(None, "--usd-cap", help=USD_CAP_HELP),
+):
+    """Week or month digests over EXISTING episode notes — no transcription.
+
+        digest --collection ai_daily_brief --by week
+        digest --collection ai_daily_brief --by month --since 2026-10-01
+
+    One model call per span (map-reduce when a span is too big; a month reuses
+    the week digests). Every statement cites an episode; citations are checked
+    deterministically and unresolvable ones dropped. Cached: a rerun with the
+    same episodes makes no call. Writes <out>/<YYYY-Www>.md or <YYYY-MM>.md.
+    """
+    from video2mdnotes.core import digest as dg
+    from video2mdnotes.core.longform import _default_complete
+    from video2mdnotes.core.playlist import parse_date
+
+    if on_exhaustion:
+        settings.on_exhaustion = on_exhaustion.strip().lower()
+    _apply_usd_cap(usd_cap)
+    try:
+        col = dg.resolve_collection(collection)
+        results = dg.run(col, by.strip().lower(), since=parse_date(since, "--since"),
+                         until=parse_date(until, "--until"),
+                         out=Path(out).expanduser() if out else None,
+                         complete=_default_complete,
+                         progress=lambda m: console.print(f"[dim]{m}[/dim]", highlight=False))
+    except (dg.DigestError, ValueError) as exc:
+        console.print(f"[red]{type(exc).__name__}:[/red] {exc}")
+        raise typer.Exit(2)
+    except SubscriptionExhausted as exc:
+        console.print(f"[yellow]Stopped (subscription exhausted):[/yellow] {exc}\n"
+                      "Finished spans are cached; re-run to continue.")
+        raise typer.Exit(1)
+    except BudgetExhausted as exc:
+        console.print(f"[yellow]Stopped (spend cap):[/yellow] {exc}")
+        raise typer.Exit(1)
+    bad = False
+    for r in results:
+        console.print(
+            f"[green]{r.span}[/green]{' (partial)' if r.partial else ''}: {r.path} · "
+            f"{r.episodes} episode(s) · {r.calls} call(s) now, {r.cached} cached · "
+            f"{r.citations} citations kept, {r.dropped} dropped · links: "
+            f"{'pass' if not r.link_problems else 'FAIL'} · "
+            f"{'written' if r.written else 'unchanged'}", highlight=False)
+        for p in r.link_problems[:10]:
+            console.print(f"  link problem: {p}", highlight=False, markup=False)
+        bad = bad or bool(r.link_problems)
+    if bad:
+        raise typer.Exit(1)
+
+
 # Registering a second command (`book`) made typer require a subcommand, which
 # would have silently broken every existing invocation — the readme, the
 # overnight sweep script, and any cron entry all call
 # `python -m video2mdnotes.main <url>` with no verb. Rather than change a
 # published interface as a side effect of adding a feature, an unrecognised
 # first argument is treated as a URL for `process`, exactly as before.
-_COMMANDS = {"process", "book", "catalog", "media", "longform", "package"}
+_COMMANDS = {"process", "book", "catalog", "media", "longform", "package",
+             "playlist-index", "digest"}
 
 
 def _with_default_command(argv: list[str]) -> list[str]:
