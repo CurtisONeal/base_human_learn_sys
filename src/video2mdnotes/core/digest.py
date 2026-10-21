@@ -100,7 +100,9 @@ _HEAD = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
 _EP_CITE = re.compile(rf"^\s*E(?P<n>\d+)\s*[,:@]?\s*\[?(?P<t>{_TS})\]?\s*$")
 _TERM = re.compile(r"^\s*[-*]\s+(?:`(?P<a>[^`]+)`|\*\*(?P<b>[^*]+)\*\*)\s*[-—–:]\s*(?P<def>.*)$")
 _CITE_ANY = re.compile(r"\[[^\[\]\n]+\]")
-_ANNOTATION = re.compile(r"\s\(→ (?:[^()\n]|\([^()\n]*\))*?per model knowledge(?:[^()\n]|\([^()\n]*\))*?\)")
+# annotate-people's in-notes role annotation: "per model knowledge" or, after a
+# web lookup (WP-P3), "per web lookup <date>; sources: …".
+_ANNOTATION = re.compile(r"\s\(→ (?:[^()\n]|\([^()\n]*\))*?per (?:model knowledge|web lookup)(?:[^()\n]|\([^()\n]*\))*?\)")
 
 
 class DigestError(RuntimeError):

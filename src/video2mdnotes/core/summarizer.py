@@ -1,4 +1,5 @@
 import datetime as dt
+import json
 import os
 import re
 import shutil
@@ -180,6 +181,83 @@ def _complete_claude_cli(model: str, system_prompt_file: Path, user_message: str
     if not content:
         raise ValueError("claude CLI returned an empty summary.")
     return content
+
+
+# Web lookup (annotate-people): the ONLY claude -p call that gets tools, and
+# only these two. Everything else stays disallowed, MCP servers are not loaded,
+# and the child runs in a scratch cwd like every other CLI call.
+WEB_TOOLS = "WebSearch,WebFetch"
+WEB_DISALLOWED = "Skill,Read,Bash,Glob,Grep,Task,Agent,Edit,Write,NotebookEdit"
+
+
+def web_lookup_argv(binary: str, alias: str, system_prompt_file: Path) -> list[str]:
+    return [binary, "-p", "--model", alias,
+            "--system-prompt-file", str(system_prompt_file),
+            "--tools", WEB_TOOLS, "--allowedTools", WEB_TOOLS,
+            "--disallowedTools", WEB_DISALLOWED,
+            "--strict-mcp-config", "--output-format", "json"]
+
+
+def _complete_claude_cli_web(model: str, system_prompt_file: Path, user_message: str) -> str:
+    """One `claude -p` subscription call with WebSearch + WebFetch only."""
+    alias = model[len(CLAUDE_CLI_PREFIX):].strip()
+    binary = shutil.which(settings.claude_cli_path) or settings.claude_cli_path
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY")}
+    with tempfile.TemporaryDirectory(prefix="v2mdnotes-web-") as neutral_cwd:
+        proc = subprocess.run(web_lookup_argv(binary, alias, system_prompt_file),
+                              input=user_message, capture_output=True, text=True,
+                              env=env, cwd=neutral_cwd, timeout=settings.claude_cli_web_timeout)
+    out = (proc.stdout or "").strip()
+    result, is_error = out, proc.returncode != 0
+    try:
+        data = json.loads(out)
+        if isinstance(data, dict) and "result" in data:
+            result = str(data.get("result") or "")
+            is_error = is_error or bool(data.get("is_error"))
+    except ValueError:
+        pass
+    if is_error:
+        combined = f"{proc.stderr or ''}\n{result}"
+        detail = combined.strip()[:400]
+        if _EXHAUSTION.search(combined):
+            raise SubscriptionExhausted(f"claude CLI subscription exhausted: {detail}",
+                                        reset_at=parse_reset_time(combined))
+        raise RuntimeError(f"claude CLI (web lookup) failed: {detail}")
+    if not result.strip():
+        raise ValueError("claude CLI web lookup returned nothing.")
+    return result
+
+
+def complete_web_lookup(system_prompt: str, user_message: str) -> tuple[str, str]:
+    """Web lookup through the SUBSCRIPTION entries of the chain only.
+
+    Web tools exist only in the `claude` CLI, so metered entries are never
+    candidates here — whatever ALLOW_METERED_FALLBACK / --usd-cap say. Each
+    entry is one call; exhaustion stops (no escalation). Returns (text, model).
+    """
+    errors: list[str] = []
+    for model in settings.llm_models:
+        if not model.startswith(CLAUDE_CLI_PREFIX):
+            continue
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", prefix="v2mdnotes-web-sys-",
+                                         encoding="utf-8", delete=False) as handle:
+            handle.write(system_prompt)
+            prompt_path = Path(handle.name)
+        try:
+            out = _complete_claude_cli_web(model, prompt_path, user_message)
+        except SubscriptionExhausted:
+            raise
+        except Exception as e:  # noqa: BLE001 - try the next subscription entry
+            errors.append(f"{model}: {e}")
+            print(f"Web lookup: {model} failed ({e}); trying next subscription entry if any.")
+            continue
+        finally:
+            prompt_path.unlink(missing_ok=True)
+        _record_unmetered(resolve_route(model), system_prompt, user_message, out)
+        return out, model
+    raise RuntimeError("web lookup: no subscription (claude-cli/*) entry succeeded"
+                       + (": " + "; ".join(errors) if errors else " (none configured)"))
 
 
 def _complete(model: str, api_key: str | None, system_prompt: str, user_message: str,

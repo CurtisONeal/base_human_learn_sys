@@ -70,6 +70,8 @@ class Settings(BaseSettings):
         "Skill,WebSearch,WebFetch,Read,Bash,Glob,Grep,Task,Agent,Edit,Write"
     )
     claude_cli_timeout: int = 900
+    # annotate-people web lookup: one call searches/fetches for up to 10 targets.
+    claude_cli_web_timeout: int = 1200
 
     openai_api_key: str | None = None
     anthropic_api_key: str | None = None

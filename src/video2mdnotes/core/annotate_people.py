@@ -1,7 +1,7 @@
 """annotate-people: a durable person index and sources index for a collection.
 
     annotate-people <run_dir | digest.md | collection name> [--collection NAME]
-                    [--max-calls N] [--refresh]
+                    [--max-calls N] [--refresh] [--no-web] [--max-web-calls N]
 
 An agentic follow-up AFTER the summaries. It reads finished episode notes
 (packages or run dirs) and digests — never transcripts — and writes, in the
@@ -33,6 +33,17 @@ backgrounds, the sources index, every link — is deterministic.
 there is never sent again unless ``--refresh``. A rerun with nothing new
 makes 0 calls and leaves every file byte-identical.
 
+**Web lookup (WP-P3).** Only for people the model marked "no reliable model
+knowledge" and for items flagged "verify — after model knowledge cutoff":
+one subscription ``claude -p`` call per ``WEB_BATCH`` targets with only
+WebSearch/WebFetch, at most 3 authoritative sources per target (3 more only
+when all 3 fail). Results are cached on the state record (``"web"``), shown
+as "per web lookup <date> (sources: …)"; "verify" clears only when the
+lookup confirms; a contradiction with model knowledge is shown, not
+overwritten. Never for private / unnamed / withheld rows or for confident
+pre-cutoff model knowledge. ``--no-web`` disables; ``--max-web-calls``
+caps (default ``MAX_WEB_CALLS``).
+
 **Privacy.** Rows whose role is a winner / attendee / audience member, names
 withheld by packaging, unnamed speakers, and anyone the model flags as a
 private individual get no person note (only a count in the index).
@@ -61,6 +72,7 @@ from video2mdnotes.core import cited_sources, digest as dg, people as people_mod
 from video2mdnotes.core.package import link_path, slugify
 
 PROMPT = BASE_DIR / "prompts" / "annotate" / "people.md"
+WEB_PROMPT = BASE_DIR / "prompts" / "annotate" / "web_lookup.md"
 GENERATOR = "video2mdnotes.annotate-people/1"
 STATE_FILE = ".annotate_state.json"
 BATCH = 20
@@ -69,6 +81,10 @@ MODEL_KNOWLEDGE = "per model knowledge (cutoff uncertain)"
 NO_KNOWLEDGE = "No reliable model knowledge; known only from sources."
 PENDING = "Description pending (call limit reached; rerun annotate-people)."
 VERIFY = "verify — after model knowledge cutoff"
+WEB_BATCH = 10                 # targets per web-lookup call
+MAX_WEB_CALLS = 5              # default --max-web-calls
+WEB_MAX_SOURCES = 3            # sources kept per target ...
+WEB_MAX_FALLBACK = 6           # ... unless the 3 most authoritative all failed
 
 CompleteFn = Callable[[str, str], Tuple[str, str]]
 
@@ -300,7 +316,7 @@ _NAME = r"[A-Z][\w'’.-]+(?: [A-Z][\w'’.-]+)+"
 _NAMED_BEFORE = re.compile(rf"{_NAME},? (?:is|was|as|became|remains) (?:now |still )?$")
 _NAMED_AFTER = re.compile(rf"^,? (?:is|was|remains) (?:now |still )?{_NAME}|^ \({_NAME}\)")
 _ORG_STOP = {"The", "It", "This", "That", "He", "She", "They", "Its", "Their", "His", "Her", "One"}
-ANNOT = re.compile(r"\s\(→ (?:[^()\n]|\([^()\n]*\))*?per model knowledge(?:[^()\n]|\([^()\n]*\))*?\)")
+ANNOT = dg._ANNOTATION          # "(→ …, per model knowledge|per web lookup …)"
 
 
 @dataclass
@@ -483,6 +499,182 @@ def run_batches(people_todo: List[Tuple[PersonEntry, str]], roles_todo: List[Rol
 
 
 # --------------------------------------------------------------------------- #
+# Web lookup (WP-P3) — only where model knowledge is missing or post-cutoff
+# --------------------------------------------------------------------------- #
+
+@dataclass
+class WebTarget:
+    kind: str                               # person | role
+    rec: Dict[str, Any]                     # the state record the result is cached on
+    payload: Dict[str, Any]
+
+
+def _needs_web_person(rec: Optional[Dict[str, Any]]) -> bool:
+    """Unknown to the model, or a model description flagged post-cutoff.
+    Never: private, pending, already looked up."""
+    if not rec or rec.get("private") or rec.get("pending") or "web" in rec:
+        return False
+    return (not rec.get("known")) or bool(rec.get("verify"))
+
+
+def _needs_web_role(rec: Optional[Dict[str, Any]]) -> bool:
+    return bool(rec) and bool(rec.get("verify")) and "web" not in rec
+
+
+def select_web_targets(entries: Sequence[PersonEntry], refs: Sequence[RoleRef],
+                       state: Dict[str, Any], show: str) -> List[WebTarget]:
+    """Roles flagged "verify — after cutoff" first, then people with no
+    reliable model knowledge (most appearances first; multi-word names before
+    bare handles). Private / unnamed / withheld rows never get here."""
+    out: List[WebTarget] = []
+    for r in refs:
+        rec = state["roles"].get(r.key)
+        if _needs_web_role(rec):
+            out.append(WebTarget("role", rec, {
+                "kind": "role", "reference": r.phrase, "episode_date": r.date.isoformat(),
+                "sentence": r.context, "show": show,
+                "model_answer": {"name": rec.get("name", ""),
+                                 "confidence": rec.get("confidence", "")}}))
+    people: List[Tuple[int, int, WebTarget]] = []
+    seen: set = set()
+    for i, p in enumerate(entries):
+        rec = _state_person(state, p)
+        if not _needs_web_person(rec) or id(rec) in seen:
+            continue
+        seen.add(id(rec))
+        payload = _person_payload(p, show, "")
+        payload.pop("id")
+        payload["kind"] = "person"
+        if rec.get("known") and rec.get("description"):
+            payload["model_description"] = rec["description"]
+        people.append((0 if len(p.name.split()) > 1 else 1, i, WebTarget("person", rec, payload)))
+    out += [t for _, _, t in sorted(people, key=lambda x: (x[0], x[1]))]
+    return out
+
+
+def _sentences(text: str, n: int = 3) -> str:
+    parts = re.split(r"(?<=[.!?])\s+", " ".join(str(text or "").split()))
+    return " ".join(parts[:n]).strip()
+
+
+def normalize_web(x: Dict[str, Any], kind: str, as_of: dt.date, model: str) -> Dict[str, Any]:
+    """Enforce the contract: ≤3 sources (≤6 only on fallback), real URLs,
+    "found" only with a supporting source and an answer — never invented."""
+    fallback = bool(x.get("fallback_used"))
+    srcs = [str(u).strip() for u in (x.get("sources") or []) if isinstance(u, str)]
+    srcs = list(dict.fromkeys(u for u in srcs if re.match(r"^https?://\S+$", u)))
+    srcs = srcs[:WEB_MAX_FALLBACK if fallback else WEB_MAX_SOURCES]
+    name = " ".join(str(x.get("name") or "").split())
+    desc = _sentences(x.get("description") or "")
+    conf = str(x.get("confidence") or "low").lower()
+    conf = conf if conf in ("high", "medium", "low") else "low"
+    note = " ".join(str(x.get("note") or "").split())[:200]
+    found = str(x.get("status") or "").lower() == "found"
+    if found and not srcs:
+        found, note = False, note or "no supporting source returned"
+    if found and not (name if kind == "role" else (desc or name)):
+        found = False
+    agrees = x.get("agrees_with_model")
+    return {"status": "found" if found else "not_found",
+            "name": name if found else "", "description": desc if found else "",
+            "sources": srcs if found else [], "confidence": conf if found else "",
+            "fallback_used": fallback and found,
+            "agrees_with_model": agrees if isinstance(agrees, bool) else None,
+            "note": note, "looked_up_at": as_of.isoformat(), "model": model}
+
+
+@dataclass
+class WebLog:
+    calls: int = 0
+    models: List[str] = field(default_factory=list)
+    targets: int = 0
+    sent: int = 0
+    found: int = 0
+    not_found: int = 0
+    stopped: str = ""
+
+
+def run_web_lookups(targets: List[WebTarget], complete: CompleteFn, max_calls: Optional[int],
+                    as_of: dt.date, log: WebLog) -> None:
+    """ceil(targets / WEB_BATCH) calls, capped by max_calls. Each result is
+    cached on its state record as rec["web"]; a target the reply omits is not
+    cached (retried next run)."""
+    log.targets = len(targets)
+    system = WEB_PROMPT.read_text(encoding="utf-8")
+    for i in range(math.ceil(len(targets) / WEB_BATCH)):
+        if max_calls is not None and log.calls >= max_calls:
+            log.stopped = f"--max-web-calls {max_calls} reached"
+            break
+        batch = targets[i * WEB_BATCH:(i + 1) * WEB_BATCH]
+        ids = {f"W{j + 1}": t for j, t in enumerate(batch)}
+        user = ("TARGETS:\n" + json.dumps([{"id": k, **t.payload} for k, t in ids.items()],
+                                          ensure_ascii=False, indent=1) + "\n")
+        try:
+            text, model = complete(system, user)
+        except Exception as exc:  # noqa: BLE001 - keep finished batches
+            log.stopped = f"web lookup call {i + 1} failed: {str(exc)[:200]}"
+            if type(exc).__name__ in ("SubscriptionExhausted", "BudgetExhausted"):
+                raise
+            break
+        log.calls += 1
+        log.sent += len(batch)
+        if model and model not in log.models:
+            log.models.append(model)
+        try:
+            data = dg.parse_reply(text)
+        except dg.DigestError as exc:
+            log.stopped = f"web lookup call {i + 1}: {exc}"
+            break
+        for x in data.get("targets") or []:
+            t = ids.get(str(x.get("id"))) if isinstance(x, dict) else None
+            if t is None or "web" in t.rec:
+                continue
+            t.rec["web"] = normalize_web(x, t.kind, as_of, model)
+            if t.rec["web"]["status"] == "found":
+                log.found += 1
+            else:
+                log.not_found += 1
+
+
+def _url_label(u: str) -> str:
+    host = re.sub(r"^https?://(?:www\.)?", "", u).split("/", 1)[0]
+    return host or u
+
+
+def _md_url(u: str) -> str:
+    return u.replace("(", "%28").replace(")", "%29").replace(" ", "%20").replace("|", "%7C")
+
+
+def web_sources_md(w: Dict[str, Any]) -> str:
+    return ", ".join(f"[{_url_label(u)}]({_md_url(u)})" for u in w.get("sources") or [])
+
+
+def web_label(w: Dict[str, Any]) -> str:
+    """'per web lookup 2026-10-21 (sources: [a](u), [b](u))'."""
+    return f"per web lookup {w.get('looked_up_at')} (sources: {web_sources_md(w)})"
+
+
+def apply_web_role(rec: Dict[str, Any]) -> Dict[str, Any]:
+    """The effective resolution: a found web answer replaces the model's
+    label for that fact; "verify" is cleared only when the lookup confirms
+    (same holder, or model had none; high/medium confidence). A different
+    holder is a contradiction: both are shown, verify stays."""
+    res = dict(rec)
+    w = rec.get("web")
+    if not w or w.get("status") != "found":
+        return res
+    model_name = (rec.get("name") or "").strip()
+    same = (not model_name) or people_mod.name_key(model_name) == people_mod.name_key(w["name"])
+    res.update(name=w["name"], confidence=w.get("confidence") or "low", source="web",
+               description=w.get("description") or rec.get("description", ""))
+    if not same:
+        res["model_name"] = model_name
+        res["contradiction"] = True
+    res["verify"] = not (same and res["confidence"] in ("high", "medium"))
+    return res
+
+
+# --------------------------------------------------------------------------- #
 # Rendering
 # --------------------------------------------------------------------------- #
 
@@ -498,10 +690,19 @@ def _q(v: Any) -> str:
     return json.dumps(v, ensure_ascii=False)
 
 
+def _web_found(rec: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    w = (rec or {}).get("web")
+    return w if w and w.get("status") == "found" and w.get("description") else None
+
+
 def _description(rec: Optional[Dict[str, Any]]) -> Tuple[str, str]:
-    """(text, kind) kind: model | none | pending."""
+    """(text, kind) kind: model | web | none | pending. A web description is
+    used only where the lookup was triggered (unknown, or post-cutoff)."""
     if not rec:
         return PENDING, "pending"
+    w = _web_found(rec)
+    if w:
+        return w["description"], "web"
     if rec.get("known") and (rec.get("description") or "").strip():
         return rec["description"].strip(), "model"
     return NO_KNOWLEDGE, "none"
@@ -514,6 +715,11 @@ def render_person(p: PersonEntry, rec: Optional[Dict[str, Any]], pdir: Path,
     eps = {a.episode.key for a in p.apps if a.episode} | {
         e.key for r, _ in role_apps for e in r.episodes}
     canonical = (rec or {}).get("canonical_name") or ""
+    w = _web_found(rec)
+    canon_src = MODEL_KNOWLEDGE
+    if not canonical and w and w.get("name") and \
+            people_mod.name_key(w["name"]) != people_mod.name_key(p.name):
+        canonical, canon_src = w["name"], f"per web lookup {w.get('looked_up_at')}"
     aliases = list(dict.fromkeys(p.aliases + ([canonical] if canonical and canonical != p.name else [])))
     fm = ["---", f"name: {_q(p.name)}",
           "aliases: [" + ", ".join(_q(a) for a in aliases) + "]",
@@ -526,13 +732,27 @@ def render_person(p: PersonEntry, rec: Optional[Dict[str, Any]], pdir: Path,
           "tags: [person]", "---"]
     md = [f"# {p.name}", ""]
     if canonical and people_mod.name_key(canonical) != people_mod.name_key(p.name):
-        md += [f"_Probable spelling, {MODEL_KNOWLEDGE}: **{canonical}**. The notes use the "
+        md += [f"_Probable spelling, {canon_src}: **{canonical}**. The notes use the "
                f"transcript's spelling._", ""]
-    label = (f"Description — {MODEL_KNOWLEDGE}" if kind == "model" else "Description")
+    label = {"model": f"Description — {MODEL_KNOWLEDGE}",
+             "web": f"Description — {web_label(w) if w else ''}"}.get(kind, "Description")
     md += [f"## {label}", "", desc, ""]
     if kind == "model":
         md += [f"_Model knowledge ({(rec or {}).get('model', 'model')}), not from the sources; "
                "may be outdated. Verify before relying on it._", ""]
+    elif kind == "web" and w:
+        md += [f"_Web lookup ({w.get('model') or 'model'}, {w.get('confidence') or 'low'} confidence"
+               f"{', fallback sources' if w.get('fallback_used') else ''}), not from the episodes; "
+               "check the linked sources before relying on it._", ""]
+        if rec.get("known") and rec.get("description"):
+            if w.get("agrees_with_model") is False:
+                md += [f"_Contradiction noted — model knowledge said: {rec['description']}_", ""]
+            else:
+                md += [f"_Model knowledge, for comparison: {rec['description']}_", ""]
+    elif kind == "none" and (rec or {}).get("web"):
+        wn = rec["web"]
+        md += [f"_Web lookup {wn.get('looked_up_at')}: not found"
+               f"{' (' + wn['note'] + ')' if wn.get('note') else ''}._", ""]
     md += ["## As stated in sources", ""]
     stated = []
     for a in p.apps:
@@ -566,21 +786,47 @@ def render_person(p: PersonEntry, rec: Optional[Dict[str, Any]], pdir: Path,
     return "\n".join(fm) + "\n" + "\n".join(md)
 
 
+def _web_tail(res: Dict[str, Any]) -> str:
+    w = res.get("web") or {}
+    return (f"per web lookup {w.get('looked_up_at')}; sources: {web_sources_md(w)}")
+
+
 def _resolution_text(r: RoleRef, res: Dict[str, Any], link: Optional[str]) -> str:
     name = (res.get("name") or "").strip()
     who = f"[{name}]({link})" if (name and link) else (name or "unresolved")
+    d = r.date.isoformat()
+    if res.get("source") == "web":
+        if res.get("contradiction"):
+            return (f"→ {who}?, as of {d}, {_web_tail(res)}; contradicts model knowledge "
+                    f"({res.get('model_name')}) — verify")
+        if res.get("verify"):
+            return f"→ {who}?, as of {d}, {_web_tail(res)} ({res.get('confidence')} confidence) — verify"
+        return f"→ {who}, as of {d}, {_web_tail(res)} ({res.get('confidence')} confidence)"
+    nf = ""
+    if (res.get("web") or {}).get("status") == "not_found":
+        nf = f"; web lookup {res['web'].get('looked_up_at')}: not found"
     if res.get("verify"):
-        return f"→ {who}?, as of {r.date.isoformat()}, per model knowledge — {VERIFY}"
-    return f"→ {who}, as of {r.date.isoformat()}, per model knowledge ({res.get('confidence', 'low')} confidence)"
+        return f"→ {who}?, as of {d}, per model knowledge — {VERIFY}{nf}"
+    return f"→ {who}, as of {d}, per model knowledge ({res.get('confidence', 'low')} confidence){nf}"
 
 
 def annotation(r: RoleRef, res: Dict[str, Any], link: Optional[str]) -> str:
     """The minimal in-notes annotation (ANNOT matches it)."""
     name = (res.get("name") or "").strip()
     who = f"[{name}]({link})" if (name and link) else (name or "unresolved")
-    tail = f" — {VERIFY}" if res.get("verify") else ""
     q = "?" if res.get("verify") and name else ""
+    if res.get("source") == "web":
+        tail = ""
+        if res.get("contradiction"):
+            tail = f"; model knowledge: {res.get('model_name')} — verify"
+        elif res.get("verify"):
+            tail = " — verify"
+        return f" (→ {who}{q}, as of {r.date.isoformat()}, {_web_tail(res)}{tail})"
+    tail = f" — {VERIFY}" if res.get("verify") else ""
     return f" (→ {who}{q}, as of {r.date.isoformat()}, per model knowledge{tail})"
+
+
+_KIND_TAG = {"model": " _(model knowledge)_", "web": " _(web lookup)_"}
 
 
 def render_people_index(entries: Sequence[PersonEntry], recs: Dict[str, Optional[Dict]],
@@ -593,8 +839,9 @@ def render_people_index(entries: Sequence[PersonEntry], recs: Dict[str, Optional
           f"generated_by: {GENERATOR}", "tags: [people-index]", "---",
           f"# {show} — people", "",
           f"> {len(entries)} people from the People sections of {n_eps} episode(s) and "
-          f"{n_digests} digest(s). Descriptions are model knowledge (cutoff uncertain), "
-          "labelled in each note; everything else is as the sources state. "
+          f"{n_digests} digest(s). Descriptions are model knowledge (cutoff uncertain) or, "
+          "where the model had none or the date is past its cutoff, a web lookup — labelled in "
+          "each note with its sources; everything else is as the sources state. "
           f"{skipped_private} private individual(s) / unnamed speaker row(s) have no note.", "",
           "| person | role in series | appearances | first seen | last seen | description |",
           "|---|---|---:|---|---|---|"]
@@ -606,12 +853,13 @@ def render_people_index(entries: Sequence[PersonEntry], recs: Dict[str, Optional
         n = len({a.episode.key for a in p.apps if a.episode} | {e.key for r, _ in ra for e in r.episodes})
         md.append(f"| [{_cell(p.name)}]({p.slug}.md) | {_cell(p.role or 'referred to by role')} | {n} | "
                   f"{dates[0].isoformat() if dates else '-'} | {dates[-1].isoformat() if dates else '-'} | "
-                  f"{_cell(first)}{' _(model knowledge)_' if kind == 'model' else ''} |")
+                  f"{_cell(first)}{_KIND_TAG.get(kind, '')} |")
     md += ["", "## Vague role references", ""]
     if not resolved:
         md.append("- None found in the notes.")
     else:
-        md.append(f"_Resolved for each episode's date from model knowledge; full log in "
+        md.append(f"_Resolved for each episode's date from model knowledge (or a web lookup "
+                  f"where past the cutoff); full log in "
                   f"[_resolutions](_resolutions.md)._")
         md.append("")
         for r, res in resolved:
@@ -620,12 +868,26 @@ def render_people_index(entries: Sequence[PersonEntry], recs: Dict[str, Optional
     return "\n".join(md) + "\n"
 
 
+def _status(res: Dict[str, Any]) -> str:
+    if res.get("source") == "web":
+        s = f"{_web_tail(res)}"
+        if res.get("contradiction"):
+            return f"{s}; contradicts model knowledge ({res.get('model_name')}) — verify"
+        return s + (" — verify" if res.get("verify") else "; confirmed")
+    nf = ""
+    if (res.get("web") or {}).get("status") == "not_found":
+        nf = f"; web lookup {res['web'].get('looked_up_at')}: not found"
+    return (VERIFY if res.get("verify") else "as of episode date, per model knowledge") + nf
+
+
 def render_resolutions(resolved: Sequence[Tuple[RoleRef, Dict]], pdir: Path) -> str:
     md = ["---", "title: \"Vague role references — resolution log\"", f"generated_by: {GENERATOR}",
           "tags: [people-index]", "---", "# Vague role references — resolution log", "",
           "_Every role reference found in the notes (\"the Secretary of State\", \"Meta's CEO\"), "
-          "resolved for the episode's date from model knowledge — never from the sources. "
-          "\"verify\" means the date is after the model's knowledge cutoff._", "",
+          "resolved for the episode's date from model knowledge — never from the sources — "
+          "or, when the date is after the model's knowledge cutoff, from a web lookup (sources "
+          "linked). \"verify\" means not confirmed: after the cutoff and not (yet) confirmed "
+          "by a lookup, or the lookup contradicts model knowledge._", "",
           "| reference | episode date | resolved | confidence | status | episodes | context |",
           "|---|---|---|---|---|---|---|"]
     for r, res in resolved:
@@ -634,7 +896,7 @@ def render_resolutions(resolved: Sequence[Tuple[RoleRef, Dict]], pdir: Path) -> 
             name = f"[{name}]({res['slug']}.md)"
         eps = ", ".join(f"[{_cell(e.title)[:40]}]({_rel(e.notes_path, pdir)})" for e in r.episodes)
         md.append(f"| {_cell(r.phrase)} | {r.date.isoformat()} | {_cell(name)} | "
-                  f"{res.get('confidence', '-')} | {VERIFY if res.get('verify') else 'as of episode date'} | "
+                  f"{res.get('confidence', '-')} | {_status(res)} | "
                   f"{eps} | {_cell(r.context[:160])} |")
     if not resolved:
         md.append("| - | - | - | - | - | - | - |")
@@ -734,10 +996,13 @@ def annotate_notes(ep: dg.Episode, refs: Sequence[Tuple[RoleRef, Dict]],
                 if pos < 0:
                     continue
                 end = pos + len(m.group("p"))
-                if ANNOT.match(line[end:]):
+                old = ANNOT.match(line[end:])
+                if old and old.group(0) == note:
                     done = True
                     break
-                lines[i] = line[:end] + note + line[end:]
+                # a stale annotation (e.g. model knowledge, now looked up) is replaced
+                rest = line[end + len(old.group(0)):] if old else line[end:]
+                lines[i] = line[:end] + note + rest
                 changed += 1
                 done = True
                 break
@@ -766,11 +1031,14 @@ class AnnotateResult:
     written: List[Path]
     stopped: str = ""
     link_problems: List[str] = field(default_factory=list)
+    web: Dict[str, Any] = field(default_factory=dict)
 
 
 def run(scope: Scope, complete: Optional[CompleteFn], *, max_calls: Optional[int] = None,
         refresh: bool = False, annotate: bool = True, as_of: Optional[dt.date] = None,
-        progress: Callable[[str], None] = lambda m: None) -> AnnotateResult:
+        progress: Callable[[str], None] = lambda m: None,
+        web_complete: Optional[CompleteFn] = None, web: bool = True,
+        max_web_calls: Optional[int] = MAX_WEB_CALLS) -> AnnotateResult:
     as_of = as_of or dt.date.today()
     state_path = scope.roots[0] / "people" / STATE_FILE
     state = _load_state(state_path)
@@ -799,6 +1067,7 @@ def run(scope: Scope, complete: Optional[CompleteFn], *, max_calls: Optional[int
         res = pres.get(pid)
         if res is None:
             continue                             # not sent (call limit): stays pending
+        prev = _state_person(state, p) or {}
         state["people"][p.slug] = {
             "name": p.name, "keys": sorted(p.keys),
             "known": bool(res.get("known")) and not res.get("private"),
@@ -806,17 +1075,31 @@ def run(scope: Scope, complete: Optional[CompleteFn], *, max_calls: Optional[int
             "canonical_name": (res.get("canonical_name") or "").strip(),
             "private": bool(res.get("private")), "model": res.get("model", ""),
             "described_at": as_of.isoformat()}
+        if "web" in prev:                        # a lookup is cached, not repeated by --refresh
+            state["people"][p.slug]["web"] = prev["web"]
         new_described += 1
     for r in roles_todo:
         res = rres.get(r.id)
         if res is None:
             continue
         after = bool(res.get("after_cutoff")) or bool(cut and (r.date.year, r.date.month) > cut)
+        prev = state["roles"].get(r.key) or {}
         state["roles"][r.key] = {
             "phrase": r.phrase, "date": r.date.isoformat(), "name": (res.get("name") or "").strip(),
             "confidence": str(res.get("confidence") or "low").lower(), "verify": after,
             "description": (res.get("description") or "").strip(), "model": res.get("model", ""),
             "resolved_at": as_of.isoformat()}
+        if "web" in prev:
+            state["roles"][r.key]["web"] = prev["web"]
+
+    # -- web lookup: only unknown people and post-cutoff ("verify") items
+    wlog = WebLog()
+    if web and web_complete is not None:
+        targets = select_web_targets(entries, refs, state, scope.show)
+        if targets:
+            progress(f"web lookup: {len(targets)} target(s), {WEB_BATCH} per call, "
+                     f"max {max_web_calls} call(s)")
+            run_web_lookups(targets, web_complete, max_web_calls, as_of, wlog)
 
     # -- role resolutions → person entries
     by_key: Dict[str, PersonEntry] = {}
@@ -830,7 +1113,7 @@ def run(scope: Scope, complete: Optional[CompleteFn], *, max_calls: Optional[int
         rec = state["roles"].get(r.key)
         if not rec:
             continue
-        res = dict(rec)
+        res = apply_web_role(rec)
         name = res.get("name") or ""
         if name and res.get("confidence") in ("high", "medium"):
             k = people_mod.name_key(name)
@@ -840,11 +1123,18 @@ def run(scope: Scope, complete: Optional[CompleteFn], *, max_calls: Optional[int
                 by_key[k] = p
                 extra.append(p)
                 if p.slug not in state["people"] and res.get("description"):
-                    state["people"][p.slug] = {
-                        "name": name, "keys": [k], "known": True,
-                        "description": res["description"], "canonical_name": "",
-                        "private": False, "model": res.get("model", ""),
-                        "described_at": res.get("resolved_at", as_of.isoformat())}
+                    if res.get("source") == "web":
+                        state["people"][p.slug] = {
+                            "name": name, "keys": [k], "known": False, "description": "",
+                            "canonical_name": "", "private": False, "model": "",
+                            "described_at": res["web"]["looked_up_at"], "web": dict(res["web"]),
+                            "from_role": True}
+                    else:
+                        state["people"][p.slug] = {
+                            "name": name, "keys": [k], "known": True,
+                            "description": res["description"], "canonical_name": "",
+                            "private": False, "model": res.get("model", ""),
+                            "described_at": res.get("resolved_at", as_of.isoformat())}
             res["slug"] = p.slug
             role_apps.setdefault(p.slug, []).append((r, res))
         resolved.append((r, res))
@@ -901,10 +1191,11 @@ def run(scope: Scope, complete: Optional[CompleteFn], *, max_calls: Optional[int
             annotated += annotate_notes(e, resolved, people_dir_for)
 
     state["last_run"] = {"calls": log.calls, "models": log.models, "people": len(shown),
-                         "stopped": log.stopped or None}
+                         "stopped": log.stopped or None, "web_calls": wlog.calls,
+                         "web_stopped": wlog.stopped or None}
     stable = {k: v for k, v in state.items() if k != "last_run"}
     old = _load_state(state_path)
-    if {k: v for k, v in old.items() if k != "last_run"} != stable or log.calls:
+    if {k: v for k, v in old.items() if k != "last_run"} != stable or log.calls or wlog.calls:
         _write_if_changed(state_path, json.dumps(state, indent=1, ensure_ascii=False, sort_keys=True) + "\n")
     return AnnotateResult(
         roots=scope.roots, people=len(shown), new_described=new_described, calls=log.calls,
@@ -912,7 +1203,21 @@ def run(scope: Scope, complete: Optional[CompleteFn], *, max_calls: Optional[int
         roles=[{"reference": r.phrase, "date": r.date.isoformat(), "name": res.get("name"),
                 "confidence": res.get("confidence"), "verify": res.get("verify")} for r, res in resolved],
         skipped_private=private, sources=sitems, notes_annotated=annotated, written=written,
-        stopped=log.stopped, link_problems=problems)
+        stopped=log.stopped, link_problems=problems, web=_web_summary(state, wlog))
+
+
+def _web_summary(state: Dict[str, Any], wlog: WebLog) -> Dict[str, Any]:
+    """This run's calls + the state's totals over every eligible item."""
+    people = [r for r in state["people"].values()
+              if not r.get("private") and not r.get("from_role") and ((not r.get("known")) or r.get("verify") or "web" in r)]
+    roles = [r for r in state["roles"].values() if r.get("verify") or "web" in r]
+    def tally(recs):
+        st = [(r.get("web") or {}).get("status") for r in recs]
+        return {"eligible": len(recs), "found": st.count("found"),
+                "not_found": st.count("not_found"), "pending": st.count(None)}
+    return {"calls": wlog.calls, "models": wlog.models, "targets": wlog.targets,
+            "sent": wlog.sent, "found": wlog.found, "not_found": wlog.not_found,
+            "stopped": wlog.stopped, "people": tally(people), "roles": tally(roles)}
 
 
 def _check_links(text: str, from_dir: Path) -> List[str]:
@@ -929,5 +1234,6 @@ def _check_links(text: str, from_dir: Path) -> List[str]:
     return out
 
 
-__all__ = ["AnnotateError", "AnnotateResult", "BATCH", "Scope", "annotation", "collect_people",
-           "find_role_refs", "resolve_scope", "run"]
+__all__ = ["AnnotateError", "AnnotateResult", "BATCH", "MAX_WEB_CALLS", "Scope", "WEB_BATCH",
+           "annotation", "apply_web_role", "collect_people", "find_role_refs", "normalize_web",
+           "resolve_scope", "run", "select_web_targets"]

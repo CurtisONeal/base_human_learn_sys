@@ -1683,6 +1683,11 @@ def annotate_people_cmd(
     no_annotate: bool = typer.Option(False, "--no-annotate-notes",
                                      help="Do not add role resolutions to the episode notes"),
     as_of: str = typer.Option(None, "--as-of", help="Date for recency ranking (default today)"),
+    no_web: bool = typer.Option(False, "--no-web",
+                                help="No web lookup (unknown people / post-cutoff roles stay as they are)"),
+    max_web_calls: int = typer.Option(5, "--max-web-calls",
+                                      help="Cap on web-lookup calls (10 targets each; subscription "
+                                           "claude-cli only, WebSearch/WebFetch only)"),
     on_exhaustion: str = typer.Option(None, "--on-exhaustion"),
     usd_cap: float = typer.Option(None, "--usd-cap", help=USD_CAP_HELP),
 ):
@@ -1694,10 +1699,13 @@ def annotate_people_cmd(
     Writes people/_index.md, people/<slug>.md, people/_resolutions.md and
     sources/_index.md. Model calls: only NEW people (batched, 20 per call)
     and vague role references; a rerun with nothing new makes 0 calls.
+    Then a web lookup (cached) for people with no model knowledge and roles
+    past the model's knowledge cutoff, unless --no-web.
     """
     from video2mdnotes.core import annotate_people as ap
     from video2mdnotes.core.longform import _default_complete
     from video2mdnotes.core.playlist import parse_date
+    from video2mdnotes.core import summarizer as _summ
 
     if on_exhaustion:
         settings.on_exhaustion = on_exhaustion.strip().lower()
@@ -1707,7 +1715,9 @@ def annotate_people_cmd(
                                  collection_root=_collection_root(root))
         res = ap.run(scope, _default_complete, max_calls=max_calls, refresh=refresh,
                      annotate=not no_annotate, as_of=parse_date(as_of, "--as-of"),
-                     progress=lambda m: console.print(f"[dim]{m}[/dim]", highlight=False))
+                     progress=lambda m: console.print(f"[dim]{m}[/dim]", highlight=False),
+                     web_complete=lambda s, u: _summ.complete_web_lookup(s, u),
+                     web=not no_web, max_web_calls=max_web_calls)
     except (ap.AnnotateError, ValueError) as exc:
         console.print(f"[red]{type(exc).__name__}:[/red] {exc}")
         raise typer.Exit(2)
@@ -1724,6 +1734,13 @@ def annotate_people_cmd(
                   f"{res.notes_annotated} · sources {len(res.sources)} · files written "
                   f"{len(res.written)}" + (f" · STOPPED: {res.stopped}" if res.stopped else ""),
                   highlight=False)
+    w = res.web or {}
+    if w:
+        console.print(f"[green]web lookup[/green]: calls {w['calls']} ({', '.join(w['models']) or 'none'})"
+                      f" · targets {w['targets']} · sent {w['sent']} · found {w['found']} · not found "
+                      f"{w['not_found']} · totals people {w['people']} · roles {w['roles']}"
+                      + (f" · STOPPED: {w['stopped']}" if w.get("stopped") else ""),
+                      highlight=False)
     for r in res.roots:
         console.print(f"ANNOTATE_ROOT={r}", highlight=False, markup=False)
     for p in res.link_problems[:20]:
