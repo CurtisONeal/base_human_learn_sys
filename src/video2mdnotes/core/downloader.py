@@ -144,23 +144,30 @@ def probe_source(url: str, allow_embed_scrape: bool = True) -> List[SourceInfo]:
             logger.warning(f"Skipping unavailable playlist entry at position {index + 1}.")
             continue
 
-        # For playlist entries, the 'url' key is present.
-        # For a single video info dict, it might be missing. In that case, we use the original URL.
-        sources.append(SourceInfo(
-            # Prefer the canonical watch page. `url` on a YouTube entry is a
-            # signed CDN link that expires, which made archived original_url.txt
-            # files useless for re-running a source later.
-            url=entry.get('webpage_url') or entry.get('url') or url,
-            title=entry.get('title', 'untitled'),
-            tags=entry.get('tags') or [],
-            description=entry.get('description') or "",
-            subtitles=entry.get('subtitles') or {},
-            has_automatic_captions=bool(entry.get('automatic_captions')),
-            playlist_title=playlist_title,
-            playlist_id=playlist_id,
-            meta=from_ytdlp_info(entry),
-        ))
+        sources.append(source_from_info(entry, url, playlist_title, playlist_id))
     return sources
+
+
+def source_from_info(entry: Dict[str, Any], fallback_url: str,
+                     playlist_title: Optional[str] = None,
+                     playlist_id: Optional[str] = None) -> SourceInfo:
+    """One SourceInfo from a FULL yt-dlp info dict (not a flat entry)."""
+    # For playlist entries, the 'url' key is present.
+    # For a single video info dict, it might be missing. In that case, we use the original URL.
+    return SourceInfo(
+        # Prefer the canonical watch page. `url` on a YouTube entry is a
+        # signed CDN link that expires, which made archived original_url.txt
+        # files useless for re-running a source later.
+        url=entry.get('webpage_url') or entry.get('url') or fallback_url,
+        title=entry.get('title', 'untitled'),
+        tags=entry.get('tags') or [],
+        description=entry.get('description') or "",
+        subtitles=entry.get('subtitles') or {},
+        has_automatic_captions=bool(entry.get('automatic_captions')),
+        playlist_title=playlist_title,
+        playlist_id=playlist_id,
+        meta=from_ytdlp_info(entry),
+    )
 
 
 def fetch_audio(source: SourceInfo, convert: bool = True) -> Path:
