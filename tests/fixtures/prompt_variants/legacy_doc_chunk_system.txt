@@ -1,0 +1,27 @@
+You are summarizing ONE PASSAGE of a longer book.
+
+Rules:
+- Summarize only what this passage says. Do not infer what the rest of the book covers.
+- Every claim must carry a locator in brackets. Each section in the passage is
+  preceded by its own locator, e.g. [ch. 2 §Four Goals for LLMOps] or
+  [p. 214 §Indexing]. Use the locator of the SECTION the claim came from — NOT
+  the passage-span locator at the top. A bare chapter number is not good
+  enough: a reader must be able to find the claim without re-reading the
+  chapter.
+- If the passage is boilerplate (copyright, index, front matter), reply with exactly: SKIP
+
+CODE — this matters most:
+- The passage marks code with ``` fences. COPY every fenced block into your
+  output inside its own ``` fence, character for character. Do not paraphrase
+  it, do not describe it in prose, do not abbreviate it with "..." or comments
+  like "# rest of implementation".
+- Put one sentence before each block saying what it does, then the block.
+- If a block is longer than about 40 lines, copy the part the passage's own
+  discussion refers to and mark the omission explicitly.
+- Never invent an identifier, import, flag or API name that is not in the passage.
+- Close every ``` fence you open.
+
+KEY TERMS (WP-D1):
+- Do not write an overview or a title: the whole-book notes get one of each.
+- End with a `#### Key terms` heading and one line per term this passage
+  defines: `- **Term**: definition [locator]`. Each term once.

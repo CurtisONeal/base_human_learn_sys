@@ -71,6 +71,23 @@ def _apply_usd_cap(usd_cap) -> None:
     settings.run_usd_cap = float(usd_cap)
 
 
+PROMPT_VARIANT_HELP = ("Summary prompt version: current (with the People section) or legacy "
+                       "(the prompts before it, for A/B tests). Overrides PROMPT_VARIANT; "
+                       "recorded as prompt_variant in the notes' frontmatter.")
+
+
+def _apply_prompt_variant(value) -> None:
+    """--prompt-variant: current | legacy (None = keep PROMPT_VARIANT)."""
+    from video2mdnotes.core import variants
+    try:
+        chosen = variants.set_active(value)
+    except ValueError as exc:
+        console.print(f"[red]--prompt-variant:[/red] {exc}")
+        raise typer.Exit(2)
+    if value is not None:
+        console.print(f"[dim]Prompt variant: {chosen}[/dim]")
+
+
 NO_SUMMARY_PREFIX = "no_summary_"
 
 
@@ -316,6 +333,7 @@ def longform(
              "cached in structure_outline.json; auto tries it only with no "
              "chapters and > 30 min of media"),
     usd_cap: float = typer.Option(None, "--usd-cap", help=USD_CAP_HELP),
+    prompt_variant: str = typer.Option(None, "--prompt-variant", help=PROMPT_VARIANT_HELP),
     pack: bool = typer.Option(
         True, "--pack/--no-pack",
         help="Pack consecutive short chapters into one passage call (default on; "
@@ -342,6 +360,7 @@ def longform(
     if on_exhaustion:
         settings.on_exhaustion = on_exhaustion.strip().lower()
     _apply_usd_cap(usd_cap)
+    _apply_prompt_variant(prompt_variant)
     run_dir = Path(run_dir).expanduser()
     out_dir = Path(out).expanduser() if out else run_dir
     if plan_only:
@@ -418,6 +437,7 @@ def media(
         help="Long-recording engine: auto | parakeet-mlx | faster-whisper[:model] (default ASR_BACKEND)",
     ),
     usd_cap: float = typer.Option(None, "--usd-cap", help=USD_CAP_HELP),
+    prompt_variant: str = typer.Option(None, "--prompt-variant", help=PROMPT_VARIANT_HELP),
     package_subject: str = typer.Option(None, "--package", help=PACKAGE_HELP),
 ):
     """Transcribe and summarize local audio or video. No network access.
@@ -450,6 +470,7 @@ def media(
     if on_exhaustion:
         settings.on_exhaustion = on_exhaustion.strip().lower()
     _apply_usd_cap(usd_cap)
+    _apply_prompt_variant(prompt_variant)
 
     files: list = []
     for raw in paths:
@@ -945,6 +966,7 @@ def book(
         help="When the subscription runs out: wait | metered | local | stop | ask.",
     ),
     usd_cap: float = typer.Option(None, "--usd-cap", help=USD_CAP_HELP),
+    prompt_variant: str = typer.Option(None, "--prompt-variant", help=PROMPT_VARIANT_HELP),
     out: Path = typer.Option(
         None, "--out", help="Notes directory (default: OUTPUT_DIR/books)"),
     package_subject: str = typer.Option(None, "--package", help=PACKAGE_HELP),
@@ -964,6 +986,7 @@ def book(
     if on_exhaustion:
         settings.on_exhaustion = on_exhaustion.strip().lower()
     _apply_usd_cap(usd_cap)
+    _apply_prompt_variant(prompt_variant)
 
     target = Path(path).expanduser()
     if not target.exists():
@@ -1049,14 +1072,33 @@ def process(
              "Default 'wait' — never starts spending money unattended.",
     ),
     usd_cap: float = typer.Option(None, "--usd-cap", help=USD_CAP_HELP),
+    prompt_variant: str = typer.Option(None, "--prompt-variant", help=PROMPT_VARIANT_HELP),
     out: Path = typer.Option(
         None, "--out",
         help="Run dir for a single video; output root when the URL is a playlist "
              "(each video gets <out>/<YYYYMMDD>_<title>). Default: OUTPUT_DIR."),
     package_subject: str = typer.Option(None, "--package", help=PACKAGE_HELP),
+    limit: int = typer.Option(
+        None, "--limit", help="Playlist: only the first N matching entries, in playlist order."),
+    items: str = typer.Option(
+        None, "--items",
+        help='Playlist positions, yt-dlp playlist_items syntax: "1-3,7", "10-" (1-based).'),
+    since: str = typer.Option(
+        None, "--since", help="Playlist: entries uploaded on/after YYYY-MM-DD (dates are "
+                              "fetched only for candidates; stops early on newest-first lists)."),
+    until: str = typer.Option(
+        None, "--until", help="Playlist: entries uploaded on/before YYYY-MM-DD."),
+    dry_run_list: bool = typer.Option(
+        False, "--dry-run-list",
+        help="Print the selected entries (index, id, date, duration, title) and stop: "
+             "no download, no transcription, no model call."),
 ):
     """
     Downloads, transcribes, and summarizes a video or playlist from a URL.
+
+    Large playlists: --limit / --items / --since / --until select entries from
+    a flat, lazy listing — full metadata is fetched only for candidates, never
+    for the whole playlist. --dry-run-list shows the selection first.
 
     Prints one `RUN_DIR=<absolute path>` line per run (last lines of stdout)
     and writes <OUTPUT_DIR>/_last_run.json — read those; never guess a run dir
@@ -1065,6 +1107,7 @@ def process(
     if on_exhaustion:
         settings.on_exhaustion = on_exhaustion.strip().lower()
     _apply_usd_cap(usd_cap)
+    _apply_prompt_variant(prompt_variant)
     if group_by_playlist:
         settings.group_by_playlist = True
     if visuals_only:
@@ -1116,10 +1159,42 @@ def process(
         raise typer.Exit(0 if outcome in ("done", "skipped") else 1)
 
     # 1. Probe (metadata + caption availability; no audio yet)
+    from video2mdnotes.core import playlist as playlist_mod
     try:
-        logger.info("Step 1: Probing source...")
-        sources = probe_source(url)
-        logger.success(f"Found {len(sources)} videos.")
+        selection = playlist_mod.Selection(
+            limit=limit, items=items,
+            since=playlist_mod.parse_date(since, "--since"),
+            until=playlist_mod.parse_date(until, "--until"))
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2)
+    if selection.active or dry_run_list:
+        try:
+            listing = playlist_mod.select(
+                url, selection, need_dates=dry_run_list,
+                progress=lambda m: console.print(f"[dim]{m}[/dim]"))
+        except yt_dlp.utils.DownloadError as e:
+            console.print(f"[red]Listing failed:[/red] {e}")
+            raise typer.Exit(1)
+        typer.echo(playlist_mod.render_listing(listing, selection))
+        if dry_run_list:
+            raise typer.Exit(0)
+        if not listing.entries:
+            console.print("[yellow]No entries match the selection.[/yellow]")
+            raise typer.Exit(1)
+        try:
+            sources = playlist_mod.to_sources(listing)
+        except yt_dlp.utils.DownloadError as e:
+            logger.error(f"Processing failed: {e}")
+            raise typer.Exit(code=1)
+        logger.success(f"Selected {len(sources)} video(s).")
+    else:
+        sources = None
+    try:
+        if sources is None:
+            logger.info("Step 1: Probing source...")
+            sources = probe_source(url)
+            logger.success(f"Found {len(sources)} videos.")
     except yt_dlp.utils.DownloadError as e:
         # Not a video, and (inside probe_source) not a page that embeds one
         # either. Last resort: read it as a plain article. This is the same

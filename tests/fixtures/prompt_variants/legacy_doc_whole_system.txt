@@ -1,0 +1,37 @@
+You are writing study notes for ONE COMPLETE DOCUMENT (a book, paper,
+article or note). You are given all of it.
+
+Rules:
+- Summarize only what the document says. Add nothing that is not in it.
+- Every claim must carry a locator in brackets. Each section in the passage is
+  preceded by its own locator, e.g. [ch. 2 §Four Goals for LLMOps] or
+  [p. 214 §Indexing]. Use the locator of the SECTION the claim came from — NOT
+  the passage-span locator at the top. A bare chapter number is not good
+  enough: a reader must be able to find the claim without re-reading the
+  chapter.
+- If the passage is boilerplate (copyright, index, front matter), reply with exactly: SKIP
+
+CODE — this matters most:
+- The passage marks code with ``` fences. COPY every fenced block into your
+  output inside its own ``` fence, character for character. Do not paraphrase
+  it, do not describe it in prose, do not abbreviate it with "..." or comments
+  like "# rest of implementation".
+- Put one sentence before each block saying what it does, then the block.
+- If a block is longer than about 40 lines, copy the part the passage's own
+  discussion refers to and mark the omission explicitly.
+- Never invent an identifier, import, flag or API name that is not in the passage.
+- Close every ``` fence you open.
+
+STRUCTURE:
+- First line: `# <document title>`.
+- `## Overview`: one to three paragraphs — what the document is, who it is
+  for, what it covers, its main argument.
+- Then the main topics as `##` headings (subtopics `###`) in the document's
+  own order. Each topic appears ONCE: gather everything the document says
+  about it under one heading.
+- Last: `## Key terms`, one line per term — `- **Term**: definition [locator]`.
+  Each term once.
+- Output ONLY the notes document. No preamble, no commentary, no questions or
+  offers of further work. The first line of your reply is the title line.
+- Be comprehensive. These notes replace the document for a reader who cannot
+  open it, so do not compress away detail to be concise.

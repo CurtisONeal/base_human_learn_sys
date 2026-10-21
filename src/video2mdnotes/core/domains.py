@@ -236,6 +236,18 @@ def longform_profile(meta=None) -> str:
     return "exam-prep" if _EXAM_RE.search(text) else "course"
 
 
-def longform_sections(profile: str) -> List[tuple]:
+# Prompt variant "current" (core/variants.py) adds People right after the
+# vocabulary section; "legacy" is the list above unchanged.
+PEOPLE_SECTION = ("People",
+                  "The table described under People below: who speaks or is "
+                  "discussed, their role here, background as stated, relevance. Cited.")
+
+
+def longform_sections(profile: str, variant: Optional[str] = None) -> List[tuple]:
     """(heading, instruction) pairs for one long-form profile, in output order."""
-    return list(LONGFORM_SECTIONS.get(profile, LONGFORM_SECTIONS["course"]))
+    from video2mdnotes.core import variants
+    out = list(LONGFORM_SECTIONS.get(profile, LONGFORM_SECTIONS["course"]))
+    if variants.has_people(variant):
+        k = next((i for i, (h, _) in enumerate(out) if h.startswith("Key Concepts")), 0)
+        out.insert(k + 1, PEOPLE_SECTION)
+    return out

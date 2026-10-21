@@ -521,7 +521,7 @@ def complete_with_failover(system_prompt: str, user_message: str) -> tuple[str, 
 # reproducing it. For a corpus that is mostly programming books, notes without
 # code are notes about a book you still have to open. The instruction now says
 # *copy*, not *preserve*, and says it twice.
-_CHUNK_SYSTEM = """You are summarizing ONE PASSAGE of a longer book.
+_CHUNK_SYSTEM_LEGACY = """You are summarizing ONE PASSAGE of a longer book.
 
 Rules:
 - Summarize only what this passage says. Do not infer what the rest of the book covers.
@@ -553,8 +553,8 @@ KEY TERMS (WP-D1):
 # A document that fits one passage is read in ONE call (WP-D1): the same
 # locator and code rules as a passage, plus the whole-document structure the
 # reduce used to impose. Built from _CHUNK_SYSTEM so the two cannot drift.
-_WHOLE_SYSTEM = (
-    _CHUNK_SYSTEM
+_WHOLE_SYSTEM_LEGACY = (
+    _CHUNK_SYSTEM_LEGACY
     .replace("You are summarizing ONE PASSAGE of a longer book.",
              "You are writing study notes for ONE COMPLETE DOCUMENT (a book, paper,\n"
              "article or note). You are given all of it.")
@@ -576,6 +576,61 @@ _WHOLE_SYSTEM = (
   open it, so do not compress away detail to be concise.
 """
 )
+
+# Prompt variant "current" (core/variants.py): the document prompts also ask
+# for a People table — who the document features or discusses, their role in
+# it, background ONLY as stated, relevance, locators. docnotes.consolidate
+# merges every table into ONE `## People` before `## Key terms`. The
+# `_LEGACY` prompts above are the variant "legacy": exactly the prompts
+# before People existed.
+_DOC_PEOPLE_RULES = """- Columns, in this order:
+  `| person | role | affiliation & background (as stated) | relevance | locators |`
+- One row per person the text features or discusses substantively: its
+  authors or speakers, interviewers and interviewees, people quoted or cited,
+  people whose work, claims or decisions are explained.
+- person: the name as the text gives it.
+- role: the person's role IN THIS TEXT, not their job title — author,
+  speaker, interviewer, interviewee, panelist, quoted, cited author, person
+  discussed. The one asking the questions is the interviewer; the one
+  answering is the interviewee. Never swap them.
+- affiliation & background (as stated): only what the text says — title,
+  organisation, background, credentials. Never fill it from your own
+  knowledge; if one fact is essential, add one short clause labelled
+  `(per model knowledge, cutoff uncertain)`. Nothing stated: `not stated`.
+  Only named: `mentioned only`.
+- relevance: one or two sentences — what the person contributes, argues,
+  found, built or decided here, and their stance. Attribute every claim and
+  quote to the person who makes it.
+- locators: the bracketed locator where the person is introduced, then up
+  to three where their key points are made.
+- Companies, products, models, teams and publications are not people: they
+  are key terms. Private individuals (attendees, winners, customers,
+  patients or students named in passing) are left out entirely.
+- If no one qualifies, write the header row, the separator row and `- None`.
+"""
+
+_CHUNK_SYSTEM = _CHUNK_SYSTEM_LEGACY.replace(
+    "KEY TERMS (WP-D1):",
+    "PEOPLE:\n- Before the key terms, add a `#### People` heading and a table of the\n"
+    "  people in this passage.\n" + _DOC_PEOPLE_RULES + "\nKEY TERMS (WP-D1):")
+_WHOLE_SYSTEM = _WHOLE_SYSTEM_LEGACY.replace(
+    "- Last: `## Key terms`",
+    "- Then `## People`, immediately before Key terms: a table of the people\n"
+    "  in the document.\n" + "\n".join("  " + ln if ln.strip() else ln
+                                       for ln in _DOC_PEOPLE_RULES.rstrip().split("\n"))
+    + "\n- Last: `## Key terms`")
+assert _CHUNK_SYSTEM != _CHUNK_SYSTEM_LEGACY and _WHOLE_SYSTEM != _WHOLE_SYSTEM_LEGACY
+
+
+def _chunk_system() -> str:
+    from video2mdnotes.core import variants
+    return _CHUNK_SYSTEM if variants.has_people() else _CHUNK_SYSTEM_LEGACY
+
+
+def _whole_system() -> str:
+    from video2mdnotes.core import variants
+    return _WHOLE_SYSTEM if variants.has_people() else _WHOLE_SYSTEM_LEGACY
+
 
 # Passages combined per reduce call. Six keeps each call small enough to finish
 # inside the CLI timeout; a 16-passage reduce timed out at 900s and lost the
@@ -708,20 +763,28 @@ def _write_overview(title: str, topics: str) -> tuple[str, str | None, str | Non
 _BRACKETS = re.compile(r"\s*\[[^\]]*\]")
 
 
-def _finish_notes(text: str, label: str, extra_terms=()) -> tuple[str, dict]:
-    """One Overview, one merged Key terms, balanced code fences. Deterministic."""
-    from video2mdnotes.core import docnotes, fences
+def _finish_notes(text: str, label: str, extra_terms=(), extra_people=()) -> tuple[str, dict]:
+    """One Overview, one merged People (variant "current"), one merged Key
+    terms, balanced code fences. Deterministic."""
+    from video2mdnotes.core import docnotes, fences, variants
 
-    done = docnotes.consolidate(text, extra_terms)
+    done = docnotes.consolidate(text, extra_terms, people=variants.has_people(),
+                                extra_people=extra_people)
     fixed, repairs = fences.repair_fences(done.text, label=label)
     info = {
         "overviews": max(done.overviews_found - done.overviews_dropped, 0),
         "overviews_dropped": done.overviews_dropped,
         "key_terms_in": done.terms_in, "key_terms_out": done.terms_out,
         "key_term_lists_merged": done.term_sections,
+        "people_rows_in": done.people_in, "people_out": done.people_out,
         "fence_repairs": repairs,
     }
     return fixed, info
+
+
+def _variant() -> str:
+    from video2mdnotes.core import variants
+    return variants.active()
 
 
 def summarize_document(source, max_words: int = None, progress=None) -> SummaryResult:
@@ -775,7 +838,7 @@ def summarize_document(source, max_words: int = None, progress=None) -> SummaryR
             progress(chunk.index, chunk.total, chunk.locator)
         header = (f"Document: {source.title}\n"
                   f"The complete document — locator span [{chunk.locator}]\n\n")
-        output, model = complete_with_failover(_WHOLE_SYSTEM, header + chunk.to_prompt_text())
+        output, model = complete_with_failover(_whole_system(), header + chunk.to_prompt_text())
         models.add(model)
         calls += 1
         output = _strip_chat_preamble(output)
@@ -791,8 +854,10 @@ def summarize_document(source, max_words: int = None, progress=None) -> SummaryR
                 f"{source.word_count:,}-word document — chat or truncation, not notes")
         final, info = _finish_notes(output, label)
     else:
+        from video2mdnotes.core import people as people_mod
         notes: list[str] = []
         passage_terms: list[str] = []
+        passage_people: list = []
         for chunk in chunks:
             if progress:
                 progress(chunk.index, chunk.total, chunk.locator)
@@ -801,13 +866,15 @@ def summarize_document(source, max_words: int = None, progress=None) -> SummaryR
                 f"Passage {chunk.index} of {chunk.total} — locator [{chunk.locator}]\n\n"
             )
             output, model = complete_with_failover(
-                _CHUNK_SYSTEM, header + chunk.to_prompt_text()
+                _chunk_system(), header + chunk.to_prompt_text()
             )
             models.add(model)
             calls += 1
             if output.strip().upper() != "SKIP":
                 body, terms, _ = docnotes.split_terms(output.strip())
                 passage_terms.extend(terms)
+                body, rows, _ = people_mod.split_people(body)
+                passage_people.extend(rows)
                 notes.append(f"### [{chunk.locator}] {' > '.join(chunk.heading_path)}\n"
                              f"{body.strip()}")
 
@@ -865,7 +932,7 @@ def summarize_document(source, max_words: int = None, progress=None) -> SummaryR
                     f"the reduce returned {len(topics.split())} words from "
                     f"{sum(len(n.split()) for n in passage_notes)} words of passage "
                     f"notes — it chatted or truncated instead of assembling"
-                ), label, passage_terms)
+                ), label, passage_terms, passage_people)
             else:
                 overview, model, why = _write_overview(source.title, topics)
                 if model:
@@ -875,13 +942,15 @@ def summarize_document(source, max_words: int = None, progress=None) -> SummaryR
                     calls += 1
                 assembled = (f"# {source.title}\n\n## Overview\n\n{overview}\n\n"
                              f"{topics.strip()}\n")
-                final, info = _finish_notes(assembled, label, passage_terms + reduce_terms)
+                final, info = _finish_notes(assembled, label, passage_terms + reduce_terms,
+                                            passage_people)
                 if why:
                     info["overview_fallback"] = why
         except (SubscriptionExhausted, BudgetExhausted):
             raise
         except Exception as exc:  # noqa: BLE001 - keep the work that succeeded
-            final, info = _finish_notes(_fallback(str(exc)[:200]), label, passage_terms)
+            final, info = _finish_notes(_fallback(str(exc)[:200]), label, passage_terms,
+                                        passage_people)
 
     repairs = info.get("fence_repairs") or []
     provenance = (
@@ -890,6 +959,7 @@ def summarize_document(source, max_words: int = None, progress=None) -> SummaryR
         f"structure_is_inferred: {source.structure_is_inferred}\n"
         f"passages: {len(chunks)}  words: {source.word_count:,}  model_calls: {calls}\n"
         f"models: {', '.join(sorted(models))}\n"
+        f"prompt_variant: {_variant()}\n"
         + (f"code_fence_repairs: {len(repairs)}\n" if repairs else "")
     )
     return SummaryResult(

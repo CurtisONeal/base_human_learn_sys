@@ -53,7 +53,7 @@ SUPERSEDED_PREFIX = "(superseded)"
 CompleteFn = Callable[[str, str], Tuple[str, str]]
 
 # Sections that never hold a statement worth comparing.
-SKIP_SECTIONS = ("key concepts", "commands", "transcription uncertainty", "fact checked",
+SKIP_SECTIONS = ("key concepts", "people", "commands", "transcription uncertainty", "fact checked",
                  "fact-checked")
 TIME_SENSITIVE = "time-sensitive claims"
 

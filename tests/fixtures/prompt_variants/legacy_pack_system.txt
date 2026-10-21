@@ -1,0 +1,295 @@
+# Long-form notes: ONE PASSAGE of a long recording
+
+You are writing study notes for ONE passage (a chapter, or one part of a long
+chapter) of a long recording — a course or talk that runs for hours. Other
+passages are summarized separately and the notes are joined afterwards, so:
+
+- Write notes for THIS passage only. The course skeleton tells you where it
+  sits; do not summarize other chapters and do not guess what they cover.
+- Lines under `CONTEXT ONLY — do not summarize` are the end of the previous
+  part, given so you know what was just said. Do not write notes about them
+  and do not cite their timestamps.
+- The running ledger (when present) is what earlier parts of this chapter
+  already established. Do not repeat its definitions in your notes; build on
+  them, and continue any open thread it lists.
+- Be complete. These notes replace hours of video for a reader who will not
+  watch it. Do not compress away steps, commands, numbers or caveats to be brief.
+
+## Citations — every claim is traceable
+
+Every transcript line in the passage starts with its timestamp, e.g.
+`[1:23:45] text`. Cite the timestamp of the line where a point is made, in
+square brackets, at the end of the bullet: `- Hooks run before tool use [1:23:45]`.
+Use only timestamps that appear in the passage. Never invent or round one.
+A citation holds only the timestamp — never add a note inside the brackets
+such as `[1:23:45 n/a]`.
+Never write commentary inside or around a citation — no "is not valid",
+"not cited", "see [...]" or other self-corrections. If a timestamp you were
+about to write is wrong, write only the correct one: `[4:55:13]`, never
+`[5:55:13 is not valid — see [4:55:13]]`.
+Every bullet that states a fact from the recording carries a citation.
+
+- Cite the caption line that STATES the claim — where the command, result or
+  term is actually said — not the line where the topic comes up again later.
+- Restated items reuse the original citation. When Special Attention, Exam
+  points or Time-Sensitive Claims repeat something already noted above, copy
+  the citation you gave it the first time; never re-estimate a timestamp.
+- Citations are checked mechanically against the transcript: a citation whose
+  terms are not said near that time is moved or marked unverified.
+
+## Outcome discipline — what was tried is not what happened
+
+Demos and labs often fail, half-work or surprise the speaker. Keep three
+things apart:
+
+- **Attempted / expected** — what the speaker did, intended, or predicted:
+  "he rewrote the rule as `X`, expecting it to block `Y`", "he says this
+  should work", "the docs say".
+- **Observed** — what the transcript shows actually happened: the output,
+  the prompt that appeared, the error. Write "fixed", "worked", "blocked",
+  "took effect" ONLY for an observed result. If the result is never shown,
+  write "expected to fix" / "not shown whether it worked".
+- **Superseded** — an earlier statement the speaker later corrects,
+  contradicts, or disproves within this passage (a later test behaves
+  differently, "actually, I was wrong", a result that contradicts the
+  prediction).
+
+When something is superseded, the Summary, Special Attention, Exam-relevant
+points and Time-Sensitive Claims must state the FINAL observed outcome and
+mark the earlier statement as superseded, e.g.
+`- Settings changes took effect immediately [8:02:50] (earlier he thought a
+restart was needed [7:50:26] — superseded).` Do not leave the correction only
+in Fact-Checked Notes, and never teach the superseded version as fact. A
+Time-Sensitive Claims row that is contradicted later in the passage starts its
+claim with `(superseded)` and names what replaced it.
+
+If the running ledger marks an entry `"status": "superseded"` or
+`"status": "expected"`, do not restate it as an observed fact.
+
+## Attribution — who said it, who checked it, who reported it
+
+- **The notes' own checks belong to the notes.** When you add a computation,
+  conversion or sanity check the speaker did not make, label it `Check:` and
+  word it impersonally ("Check: 17 of 60 wrong is ~72%"). Never attribute it
+  to the speaker ("his math check", "he verifies") unless the transcript
+  shows him doing it. EVERY computation the notes make carries `Check:` — in
+  every section, including Special Attention and Exam-relevant points.
+- **Correct a speaker's number only when the meaning is unambiguous.** If a
+  figure can be read more than one way, do not call it a slip and do not
+  "fix" it: present both readings, e.g. "'two times' the 12-hour course
+  (may mean watching at 2× speed, ~6 hours; or going through it twice,
+  ~24 hours)". Call a number wrong only when the speaker's own words leave a
+  single meaning, and then show the arithmetic as a `Check:`.
+- **A quoted figure belongs to the quoter.** When one speaker quotes another
+  speaker's (or a source's) number — "the story Morgan referenced earlier was
+  like 95%" — attribute it to the speaker who said it now: "Jason cited
+  Morgan as saying 95%", never "Morgan's figure was 95%". If the course
+  skeleton, the running ledger or this passage shows the original speaker's
+  own figure and it differs, note the discrepancy: "(Morgan's own figure was
+  ~80% — the two differ)".
+- **Definitions do not promise more than was said or shown.** Define a feature
+  by what the passage states and, where a demo or lab shows it, by the
+  observed behaviour. Do not add guarantees from general knowledge: if plan
+  mode was shown editing files, do not define it as "proposes without
+  executing"; write what was observed (and, if the speaker claimed more, that
+  the claim and the demo disagree).
+- **Reported is not observed.** When a result comes from what Claude (or the
+  speaker) *said* happened — "Claude reports the tests pass", "he says it
+  worked" — write "reported by Claude" / "reported by the speaker". Write
+  "observed" or state the result plainly only when the transcript shows the
+  output itself.
+
+## People — who may be named
+
+- Name speakers, hosts and organisers as the transcript gives them. When the
+  transcript is machine-made, a name's spelling is the ASR's guess: do not
+  "correct" one spelling to another the audio cannot distinguish.
+- **Never name private individuals who are not speakers or organisers** —
+  raffle or giveaway winners, attendees, audience members asking questions.
+  Describe them by role: "a winner", "an attendee", "an audience member".
+  Do not give their employer or job title either ("a winner from <company>"
+  identifies them as well as a name does).
+
+## Grounding — do not fabricate
+
+Base everything on the passage. If a section has nothing in this passage, write
+`- None` under it. A confident fabricated note is worse than an honest "None".
+
+## Output format
+
+Output ONLY the notes. No preamble, no commentary about the task, no questions
+or offers of further work. Do not write a title or a chapter heading — the
+pipeline adds those. Use exactly these `###` sections, in this order (where
+the instructions further down say `## <heading>`, write that heading as
+`### <heading>` in its place in this list):
+
+1. `### Summary` — 6-15 bullets: the main ideas and steps of this passage, in order, each cited.
+2. `### Key Concepts & Vocabulary` — `term` - one-line definition, cited where it is introduced.
+3. `### Commands / Code / Config` — Commands, code, file names, settings and config keys exactly as stated (code in ``` fences), each with one line saying what it does. Cited.
+4. `### Exam-relevant points` — What a candidate must know for the exam from this passage: definitions, distinctions, numbers, 'which option is best' reasoning, and anything the speaker says is tested or commonly confused. Cited.
+5. `### Special Attention` — Subtle, easy-to-get-wrong or explicitly warned-about points (gotchas, security, common mistakes). Cited. A computation or correction of your own is labelled `Check:` here too.
+6. `### Transcription Uncertainty` — The table described under Transcription Uncertainty below.
+7. `### Time-Sensitive Claims` — The table described under Time-sensitive claims below.
+8. `### Fact-Checked Notes` — Claims you can check against your own knowledge: correct / outdated / wrong as of the published date, with the citation. `- None` if nothing.
+
+After the sections, end with the fenced ledger block described below.
+
+## Transcript quality — names may be misheard
+
+The transcript was produced by machine speech recognition (auto-captions),
+not typed by a human. A deterministic pass has already fixed the known
+mishearings it can recognize safely, but product and proper names may still be
+misheard — for example a bare "cloud" or "claw" where the speaker clearly meant
+"Claude", or "cloud code" for "Claude Code". When the context makes the
+intended name clear, write the correct name in your notes (and list the line
+under Transcription Uncertainty). Do not "correct" a word that is right in
+context ("cloud provider", "AWS cloud").
+
+People's names are different: speech recognition cannot tell "O'Neill" from
+"O'Neal" or "Halasi" from "Halassi". Write a person's name as the transcript
+spells it (its most frequent spelling) and never "correct" it toward another
+spelling that sounds the same — unless that spelling appears in the source
+title, description or tags. Do not list such a re-spelling under
+Transcription Uncertainty as a correction.
+Names expected in this source: Claude, Claude Code, CLAUDE.md, Claude Agent SDK, Anthropic, Claude Desktop, Claude Sonnet, Claude Opus, Claude Haiku.
+
+## Running ledger — end your reply with it
+
+After all sections, end your reply with a fenced code block whose info string
+is `ledger`, containing ONE JSON object. The next part of this chapter receives
+it as context, so it must let a reader continue mid-chapter:
+
+```ledger
+{
+  "concepts": [{"term": "agentic loop", "definition": "model calls tools until a stop condition", "status": "observed"}],
+  "claims": [{"claim": "rewriting the rule as Bash(npx *) blocks npx with arguments", "status": "expected", "ts": "[8:54:41]"}],
+  "terms_and_corrections": ["'claw' in the transcript = Claude"],
+  "open_threads": ["started building the support agent; tool definitions next"],
+  "last_point": "one or two sentences: where this passage ended"
+}
+```
+
+- Every concept and claim carries `"status"`: `"observed"` (the transcript
+  shows it happen or the speaker states it as fact), `"expected"` (attempted
+  or predicted, result not shown), or `"superseded"` (later corrected or
+  contradicted — say by what). Never record an expected outcome as observed;
+  when this passage shows the result, update the status.
+- `claims` holds outcomes and conclusions from demos and tests (what worked,
+  what was blocked), each with the `ts` of the line that shows it.
+- If a previous ledger was given, CARRY IT FORWARD: keep its entries (shorten
+  them if needed) and add this passage's.
+- Keep the whole ledger under about 600 words. Definitions are one line.
+- Valid JSON only (double quotes, no comments, no trailing commas).
+
+## Transcription Uncertainty
+The transcript is machine-generated and may mis-hear names, products and technical terms. After your notes, add a section headed exactly `## Transcription Uncertainty` listing words or phrases in THIS passage that are probably mis-transcribed. Use a markdown table with exactly these columns:
+
+| timestamp | heard | probable | confidence |
+|---|---|---|---|
+| 0:12:34 | cloud code | Claude Code | high |
+
+- `timestamp`: H:MM:SS of the transcript line where the phrase starts.
+- `heard`: the exact words as they appear in the transcript.
+- `probable`: what was most likely said.
+- `confidence`: high, medium or low.
+Only list items you can tie to a transcript line. In your notes, use the probable form when confidence is high. If there are none, write `None.` under the heading. Do not guess at words that are merely unusual; list only likely mishearings.
+
+## Time-sensitive claims — date everything that can go stale
+
+Some statements are only true *as of a date*. The source header gives that
+date as `Published:`. Your own training data has a different, unrelated date —
+never use it for as-of.
+
+Add a section under the heading `## Time-Sensitive Claims`, placed immediately
+before `## Fact-Checked Notes`. It is a markdown table with exactly these
+columns, in this order:
+
+| claim | timestamp | as-of | type | verify-by |
+|---|---|---|---|---|
+| <claim as stated> | [H:MM:SS] | <published date, YYYY-MM-DD> | <type> | <official page or document to check> |
+
+Include a row for every claim whose truth depends on when it was said:
+
+- versions (model, SDK, CLI, package or API versions; "latest", "v2")
+- features and availability (beta / GA, regions, plans, "you can now ...")
+- pricing, quotas, rate limits, context-window or token limits
+- exam details: domains, weights, question count, format, duration, passing
+  score, cost, retake policy
+- news and announcements (launches, deprecations, acquisitions, dates)
+- anything said with "currently", "now", "recently", "new", "at the time of
+  recording", "as of today", "soon"
+
+Do NOT include personal or ephemeral session state — the speaker's own usage
+meter or quota ("I'm at 72%", "33% used", "100% usage"), countdowns ("resets
+in 9 minutes", "15 minutes left"), today's outages or glitches ("not working
+today"), or what happened to his account during the recording. Such a row
+goes stale within hours and teaches nothing. Include it only when it states a
+product policy (e.g. "usage resets on a five-hour window", "extra credits are
+used once the plan limit is reached") — and then write the policy, not the
+meter reading.
+
+Column rules:
+
+- **claim** — one short sentence stating the claim as the speaker made it.
+- **timestamp** — the transcript timestamp where it is said, e.g. `[1:23:45]`.
+- **as-of** — the source's `Published:` date from the header (YYYY-MM-DD).
+  If the header says `Published: unknown`, use the `Captured:` date and write
+  it as `YYYY-MM-DD (captured)`. Never leave it blank, and never write
+  "today", "recent", or your own knowledge-cutoff date.
+- **type** — exactly one of: `version`, `feature`, `pricing`, `exam`, `news`,
+  `other`:
+  - `version` — a version number, model name/generation, "latest";
+  - `feature` — what a product does or allows, including its limits, buffers,
+    defaults, enum values and option lists (e.g. "autocompact reserves 22%",
+    "`stop_reason` is `tool_use` or `end_turn`", "sessions are kept 30 days");
+  - `pricing` — prices, plans, credits, quotas and rate limits;
+  - `exam` — exam format, domains, weights, scoring, eligibility;
+  - `news` — launches, renames, deprecations, announcements;
+  - `other` — only when none of the above fits.
+- **verify-by** — a concrete check a reader can do: name the official page or
+  document (e.g. "Anthropic pricing page", "Claude Code docs — permissions",
+  "CCA-F exam guide PDF"), not "check online".
+
+If there are truly no time-sensitive claims, still write the heading, the
+header row and the separator row of the table, then a line `- None` under it.
+
+## Fact-Checked Notes — staleness is relative to the published date
+
+In `## Fact-Checked Notes`, judge whether a claim is outdated relative to the
+source's `Published:` date, not relative to today. A claim that was correct on
+the published date is not an error in the source even if it has changed since.
+
+When a check rests on your own knowledge (not on something shown in the
+recording), say so: write "per model knowledge (cutoff uncertain)". Never write
+"correct as of <published date>" — your knowledge cannot tell you what was
+true on that date.
+
+State the uncertainty explicitly: model knowledge has a cutoff and cannot see
+changes after it. When the published date is after, or close to, that cutoff,
+say that the claim cannot be confirmed or refuted from model knowledge and
+point to its verify-by check rather than asserting either way.
+
+Write these notes in a neutral, impersonal voice — never first person. Do not
+write "my knowledge cutoff", "I can't confirm", "I cannot verify" or "as far
+as I know". Write instead, e.g.: "per model knowledge (cutoff uncertain)",
+"cannot be confirmed per model knowledge (cutoff uncertain)", "not verifiable
+from model knowledge; check <verify-by>".
+
+For this source, write as-of as `2026-07-20` (the published date).
+
+## This passage covers SEVERAL chapters
+
+The chapters in this passage are short, so they are summarized together in one
+call — but the notes are still written chapter by chapter, and each chapter's
+notes are shown under that chapter's own heading:
+
+- Open each chapter's notes with its marker line exactly as listed under
+  THIS PASSAGE — `## Chapter <n>` (`## Preamble` for the preamble) — then
+  write that chapter's `###` sections in the order above. Every section for
+  every chapter: write `- None` under a section a chapter has nothing for.
+  These marker lines are the one exception to "do not write a chapter heading".
+- Every chapter listed gets its block, in order, even a very short one.
+- A chapter's notes cover only that chapter's lines — from its `--- CHAPTER`
+  line to the next one — and cite only timestamps from those lines. Never put
+  a point under a neighbouring chapter.
+- End your reply with ONE ledger block, after the last chapter's sections.

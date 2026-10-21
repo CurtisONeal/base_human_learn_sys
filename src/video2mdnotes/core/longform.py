@@ -51,8 +51,8 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from video2mdnotes.config import BASE_DIR
 from video2mdnotes.core import (
-    citations, consistency, domains, names, notes_format, outline as outline_mod, quality,
-    spoken_dates, summarizer,
+    citations, consistency, domains, names, notes_format, outline as outline_mod, people,
+    quality, spoken_dates, summarizer, variants,
 )
 from video2mdnotes.core.chunking import DEFAULT_MAX_WORDS
 from video2mdnotes.core.costs import BudgetExhausted, current_run_id
@@ -69,6 +69,7 @@ THEMES_PROMPT = PROMPT_DIR / "longform" / "course_map_themes.md"
 MISHEARING_FRAGMENT = PROMPT_DIR / "fragments" / "mishearing_hint.md"
 LEDGER_FRAGMENT = PROMPT_DIR / "fragments" / "ledger.md"
 MULTI_CHAPTER_FRAGMENT = PROMPT_DIR / "fragments" / "multi_chapter.md"
+PEOPLE_FRAGMENT = PROMPT_DIR / "fragments" / "people.md"
 
 OVERLAP_S = 150.0
 LEDGER_MAX_WORDS = 800
@@ -92,7 +93,10 @@ MAX_THEMES = 8
 UNCERTAINTY = "Transcription Uncertainty"
 TIME_SENSITIVE = "Time-Sensitive Claims"
 FACT_CHECKED = "Fact-Checked Notes"
-CROSS_SECTIONS = (UNCERTAINTY, TIME_SENSITIVE, FACT_CHECKED)
+# Prompt variant "current": every passage writes a People table; assembly
+# merges them into ONE `## People` section (core/people.py).
+PEOPLE = people.HEADING
+CROSS_SECTIONS = (UNCERTAINTY, TIME_SENSITIVE, FACT_CHECKED, PEOPLE)
 
 CompleteFn = Callable[[str, str], Tuple[str, str]]
 Progress = Callable[[str], None]
@@ -248,6 +252,9 @@ class Plan:
     # Model-call units over `selected` (WP-M2): each pack is consecutive whole
     # chapters summarized in ONE call, or one part of a split chapter.
     packs: List[List[Passage]] = field(default_factory=list)
+    # Summary prompt variant (core/variants.py): "current" (with People) or
+    # "legacy" (the prompts before it). Checkpoints are per variant.
+    prompt_variant: str = variants.CURRENT
 
     @property
     def passages(self) -> List[Passage]:
@@ -401,6 +408,7 @@ def build_plan(
     structure: str = "auto",
     outline_complete: Optional[CompleteFn] = None,
     pack: bool = True,
+    prompt_variant: Optional[str] = None,
 ) -> Plan:
     """Everything deterministic: meta, provenance, correction, structure, passages.
 
@@ -462,6 +470,7 @@ def build_plan(
         chapters=chapters, selected=selected,
         structure_mode=structure, outline=outline_res, raw_segments=list(segments),
         packs=pack_passages(selected, max_words, enabled=pack),
+        prompt_variant=variants.normalize(prompt_variant or variants.active()),
     )
 
 
@@ -478,10 +487,11 @@ class PassagePrompt:
         return self.system + "\n\n" + self.user
 
 
-def _sections_block(profile: str) -> str:
+def _sections_block(profile: str, variant: Optional[str] = None) -> str:
     return "\n".join(
         f"{i}. `### {heading}` — {instruction}"
-        for i, (heading, instruction) in enumerate(domains.longform_sections(profile), 1)
+        for i, (heading, instruction) in enumerate(
+            domains.longform_sections(profile, variant), 1)
     )
 
 
@@ -499,10 +509,13 @@ def mishearing_hint(provenance: Optional[quality.TranscriptProvenance],
 
 
 def passage_system_prompt(plan: Plan) -> str:
+    variant = getattr(plan, "prompt_variant", variants.CURRENT)
     parts = [
         PASSAGE_PROMPT.read_text(encoding="utf-8").replace(
-            "{{SECTIONS}}", _sections_block(plan.profile)).rstrip(),
+            "{{SECTIONS}}", _sections_block(plan.profile, variant)).rstrip(),
         mishearing_hint(plan.provenance, plan.glossary).rstrip(),
+        (PEOPLE_FRAGMENT.read_text(encoding="utf-8").rstrip()
+         if variants.has_people(variant) else ""),
         LEDGER_FRAGMENT.read_text(encoding="utf-8").rstrip(),
         quality.uncertainty_prompt_block().rstrip(),
         notes_format.time_sensitive_fragment(plan.meta).rstrip(),
@@ -898,10 +911,14 @@ def ledger_path(out_dir: Path, p: Passage) -> Path:
     return Path(out_dir) / LEDGER_DIR / f"{p.chapter_no:02d}_p{p.part}.json"
 
 
-def is_done(state: State, out_dir: Path, p: Passage) -> bool:
+def is_done(state: State, out_dir: Path, p: Passage,
+            variant: Optional[str] = None) -> bool:
+    """Checkpointed under the same prompt variant (a record without one was
+    written before variants existed: legacy)."""
     rec = state.passage(p.key)
     return (
         rec.get("status") == "done"
+        and (variant is None or rec.get("prompt_variant", variants.LEGACY) == variant)
         and abs(float(rec.get("start_s", -1)) - p.start_s) < 0.5
         and abs(float(rec.get("end_s", -1)) - p.end_s) < 0.5
         and chunk_path(out_dir, p).exists()
@@ -1011,7 +1028,7 @@ def _run_chapter(plan: Plan, chapter: List[Passage], state: State, complete: Com
     ledger: Optional[dict] = None
     prev: Optional[Passage] = None
     for p in chapter:
-        if resume and is_done(state, plan.out_dir, p):
+        if resume and is_done(state, plan.out_dir, p, plan.prompt_variant):
             ledger = json.loads(ledger_path(plan.out_dir, p).read_text(encoding="utf-8"))
             prev = p
             with state.lock:
@@ -1053,7 +1070,7 @@ def _run_chapter(plan: Plan, chapter: List[Passage], state: State, complete: Com
                      ledger_words=_ledger_words(led), ledger_dropped=dropped,
                      citation_audit=_audit_counts(audit),
                      ledger_source=source, notes_words=len(notes.split()),
-                     error=None, stopped=None)
+                     error=None, stopped=None, prompt_variant=plan.prompt_variant)
         with state.lock:
             counters["run"] += 1
         ledger, prev = led, p
@@ -1068,7 +1085,7 @@ def _run_pack(plan: Plan, pack: List[Passage], state: State, complete: CompleteF
     for is re-run on its own (one extra call), so every chapter's notes come
     from the model, never from a neighbour."""
     key = pack_key(pack)
-    if resume and all(is_done(state, plan.out_dir, p) for p in pack):
+    if resume and all(is_done(state, plan.out_dir, p, plan.prompt_variant) for p in pack):
         with state.lock:
             counters["skipped"] += 1
         progress(f"  skip {key} (checkpoint, {len(pack)} chapters)")
@@ -1117,7 +1134,7 @@ def _run_pack(plan: Plan, pack: List[Passage], state: State, complete: CompleteF
                      ledger_words=_ledger_words(led), ledger_dropped=dropped,
                      citation_audit=_audit_counts(audit), ledger_source=source,
                      notes_words=len(notes.split()), error=None, stopped=None,
-                     pack=key, pack_size=len(pack))
+                     pack=key, pack_size=len(pack), prompt_variant=plan.prompt_variant)
     if missing:
         progress(f"  WARNING {key}: no block for {', '.join(missing)} — re-running "
                  f"{'it' if len(missing) == 1 else 'them'} on {'its' if len(missing) == 1 else 'their'} own")
@@ -1388,6 +1405,7 @@ def _standard_headings() -> set:
     global _STANDARD_HEADINGS
     if _STANDARD_HEADINGS is None:
         names = {h for prof in domains.LONGFORM_SECTIONS.values() for h, _ in prof}
+        names.add(domains.PEOPLE_SECTION[0])
         _STANDARD_HEADINGS = {_norm(h) for h in names} | {"part"}
     return _STANDARD_HEADINGS
 
@@ -1611,7 +1629,8 @@ def build_course_map(plan: Plan, notes_by_key: Dict[str, str], state: State,
         cache = Path(plan.out_dir) / CHUNK_DIR / f"_course_map_{bid}.md"
         rec = state.data["course_map"].get(bid, {})
         reply, model = None, None
-        if resume and rec.get("keys") == keys and cache.exists():
+        if (resume and rec.get("keys") == keys and cache.exists()
+                and rec.get("prompt_variant", variants.LEGACY) == plan.prompt_variant):
             reply, model = cache.read_text(encoding="utf-8"), rec.get("model")
             progress(f"  skip course map {bid} (checkpoint)")
         else:
@@ -1620,7 +1639,8 @@ def build_course_map(plan: Plan, notes_by_key: Dict[str, str], state: State,
                 reply, model = complete(system, _course_map_input(batch, notes_by_key))
                 calls += 1
                 _atomic_write(cache, reply)
-                state.update("course_map", bid, keys=keys, model=model, finished_at=_now())
+                state.update("course_map", bid, keys=keys, model=model, finished_at=_now(),
+                             prompt_variant=plan.prompt_variant)
             except (summarizer.SubscriptionExhausted, BudgetExhausted):
                 raise
             except Exception as exc:  # noqa: BLE001 - deterministic table instead
@@ -1780,7 +1800,8 @@ def display_title(plan: Plan, title: str) -> str:
 
 
 def _merge_uncertainty(plan: Plan, notes_by_key: Dict[str, str],
-                       private: Sequence[str] = ()) -> Tuple[str, dict]:
+                       private: Sequence[str] = (),
+                       people_names: Sequence[str] = ()) -> Tuple[str, dict]:
     items: Dict[Tuple[str, str], dict] = {}
     omitted = known = 0
     asr = _asr_names(plan)
@@ -1829,7 +1850,8 @@ def _merge_uncertainty(plan: Plan, notes_by_key: Dict[str, str],
         info = speaker_info(plan)
         name_rows = names.names_rows(
             speakers=outline_speakers(plan),
-            notes=[chapter_body(notes_by_key[p.key], 3) for p in plan.passages],
+            notes=[chapter_body(notes_by_key[p.key], 3) for p in plan.passages]
+            + (["\n".join(people_names)] if people_names else []),
             respellings=respellings, vocab=vocab, meta_words=meta_words,
             found=info["found"])
         # WP-F9: private individuals are not listed (they are not named at all).
@@ -1843,6 +1865,40 @@ def _merge_uncertainty(plan: Plan, notes_by_key: Dict[str, str],
                              for r in name_rows],
         "name_respellings_not_applied": [{"heard": h, "probable": p} for h, p in respellings],
     }
+
+
+def merge_people_section(plan: Plan, notes_by_key: Dict[str, str],
+                         private: Sequence[str] = ()) -> Tuple[str, dict, List[people.Person]]:
+    """ONE `## People` section from every passage's People table (core/people.py).
+
+    Same person across passages = one row (normalised name; for a machine
+    transcript also sounds-alike surnames and the outline speaker variants
+    the names table uses). Private individuals (WP-F9) are dropped."""
+    rows: List[people.PersonRow] = []
+    missing = 0
+    for p in plan.passages:
+        body = section_body(notes_by_key[p.key], PEOPLE)
+        if body is None:
+            missing += 1
+            continue
+        rows.extend(people.parse_rows(body, start_order=len(rows)))
+    asr = _asr_names(plan)
+    meta_words = names.metadata_words(plan.meta)
+    vocab = names.TranscriptVocab.build(plan.segments) if asr else None
+    aliases: Dict[str, str] = {}
+    if asr:
+        info = speaker_info(plan)
+        for sp, var in info["variants"].items():
+            for v in [sp, *var]:
+                aliases[v] = info["preferred"].get(sp, sp)
+    merged = people.merge_people(
+        rows, asr=asr, timed=True, meta_words=meta_words,
+        count=(vocab.count if vocab else None), aliases=aliases, private=private)
+    md = people.render(merged, level=2, asr=asr, meta_words=meta_words)
+    if missing:
+        md = md.rstrip("\n") + (f"\n\n> {missing} passage(s) returned no {PEOPLE} section.\n")
+    return md, {"rows_in": len(rows), "people": len(merged), "passages_without": missing,
+                "names": [p.shown for p in merged]}, merged
 
 
 MODEL_KNOWLEDGE = "per model knowledge (cutoff uncertain)"
@@ -2021,7 +2077,12 @@ def assemble(plan: Plan, notes_by_key: Dict[str, str], course_map_md: str,
             v for _, var in outline_speakers(plan) for v in var]
         private = names.private_names(bodies, found, protected)
         hedge = [n for n in found if n not in private]
-    uncertainty_md, uncertainty_info = _merge_uncertainty(plan, notes_by_key, private)
+    people_md, people_info, merged_people = "", None, []
+    if variants.has_people(plan.prompt_variant):
+        people_md, people_info, merged_people = merge_people_section(plan, notes_by_key, private)
+        blocks.append(people_md)
+    uncertainty_md, uncertainty_info = _merge_uncertainty(
+        plan, notes_by_key, private, people.names_for_table(merged_people))
     hedged_total = 0
     for ch in plan.selected:
         blocks.append(f"## {display_title(plan, ch[0].title)} [{_chapter_range(ch)}]\n")
@@ -2074,6 +2135,7 @@ def assemble(plan: Plan, notes_by_key: Dict[str, str], course_map_md: str,
             "passages": len(plan.passages),
             "passage_calls": len(plan.calls_units),
             "partial": partial,
+            "prompt_variant": plan.prompt_variant,
             **({"recorded_estimate": recorded.frontmatter_value()} if recorded else {}),
         },
     )
@@ -2083,6 +2145,8 @@ def assemble(plan: Plan, notes_by_key: Dict[str, str], course_map_md: str,
                   "speaker_variants_from_transcript": speaker_info(plan)["found"],
                   "heading_spelling": speaker_info(plan)["preferred"]},
         "uncertainty": uncertainty_info,
+        "prompt_variant": plan.prompt_variant,
+        **({"people": people_info} if people_info is not None else {}),
         "time_sensitive_rows": len(check.rows),
         "time_sensitive_dropped": ts_dropped,
         "recorded_estimate": recorded.as_dict() if recorded else None,
@@ -2298,6 +2362,9 @@ def run_longform(
     _atomic_write(plan.out_dir / STRUCTURE_FILENAME,
                   json.dumps(structure_record(plan), indent=2, ensure_ascii=False) + "\n")
     state = State(plan.out_dir)
+    with state.lock:
+        state.data["prompt_variant"] = plan.prompt_variant
+        state.save()
     if plan.outline is not None:
         with state.lock:
             state.data["structure_outline"] = {

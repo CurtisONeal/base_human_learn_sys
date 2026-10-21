@@ -14,6 +14,13 @@ shape is enforced here:
   normalized term; the first definition wins and later entries contribute
   only locators the first did not have.
 
+* **Exactly one People section** (prompt variant "current", WP-AIDB):
+  every People table (per-passage, a stray one mid-document) is merged by
+  core/people.py — same person once, richest stated background, most
+  specific role, locators unioned — and rendered as ``## People``
+  immediately before ``## Key terms``. Only a `People` heading whose body is
+  a people table counts: a book chapter called "People" is a topic.
+
 Headings inside code fences are code, not structure, and are never touched.
 """
 
@@ -153,6 +160,9 @@ class Consolidated:
     term_sections: int = 0
     terms_in: int = 0
     terms_out: int = 0
+    people_sections: int = 0
+    people_in: int = 0
+    people_out: int = 0
     log: List[str] = field(default_factory=list)
 
 
@@ -186,9 +196,21 @@ def split_terms(text: str) -> Tuple[str, List[str], int]:
     return "\n".join(keep), entries, len(drop)
 
 
-def consolidate(text: str, extra_terms: Iterable[str] = ()) -> Consolidated:
-    """One Overview (the first) and one Key terms section (merged, at the end)."""
+def consolidate(text: str, extra_terms: Iterable[str] = (), *, people: bool = False,
+                extra_people: Iterable = ()) -> Consolidated:
+    """One Overview (the first) and one Key terms section (merged, at the end);
+    with `people`, one People section (merged) right before Key terms."""
+    from video2mdnotes.core import people as people_mod
+
     extra_terms = list(extra_terms)
+    people_md = ""
+    people_counts = (0, 0, 0)
+    if people:
+        text, rows, n_people = people_mod.split_people(text)
+        rows = rows + list(extra_people)
+        merged_people = people_mod.merge_people(rows, timed=False)
+        people_md = people_mod.render(merged_people, level=2, documents=True)
+        people_counts = (n_people, len(rows), len(merged_people))
     body, entries, n_sections = split_terms(text)
     lines = body.split("\n")
     heads = headings(lines)
@@ -200,11 +222,14 @@ def consolidate(text: str, extra_terms: Iterable[str] = ()) -> Consolidated:
     result = Consolidated(text="", overviews_found=len(overview),
                           overviews_dropped=len(drop))
     result.term_sections = n_sections
+    result.people_sections, result.people_in, result.people_out = people_counts
     all_entries = entries + extra_terms
     merged = merge_terms(all_entries)
     result.terms_in, result.terms_out = len(all_entries), len(merged)
     out = "\n".join(kept).rstrip()
     out = re.sub(r"\n{3,}", "\n\n", out)
+    if people_md:
+        out += "\n\n" + people_md.rstrip()
     if merged:
         out += f"\n\n{KEY_TERMS_HEADING}\n\n" + "\n".join(merged)
     result.text = out.strip() + "\n"

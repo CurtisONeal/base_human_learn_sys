@@ -5,6 +5,9 @@ from pathlib import Path
 # Project root directory
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
+PROMPT_VARIANTS = ("current", "legacy")
+
+
 class Settings(BaseSettings):
     """
     Application settings loaded from .env file and environment variables.
@@ -347,6 +350,14 @@ class Settings(BaseSettings):
     learning_root: str = "010_learning_system/by_subject"
     temp_dir: Path = BASE_DIR / "temp_files"
     prompt_file: Path = BASE_DIR / "summarize_prompt.txt"
+    # Summary prompt version, so two prompt generations can be A/B tested on
+    # the same transcript (CLI: --prompt-variant). "current" adds the People
+    # section (who is who: role, stated bio, relevance, citations) to the
+    # long-form passage prompt and the document prompts; "legacy" is exactly
+    # the prompts as they were before it (main @ 7fcd1d7). Recorded in the
+    # notes' frontmatter (`prompt_variant`) and in longform_state.json; a
+    # passage checkpointed under another variant is re-run, never reused.
+    prompt_variant: str = "current"
 
     @field_validator("run_usd_cap", mode="before")
     @classmethod
@@ -355,6 +366,14 @@ class Settings(BaseSettings):
         if isinstance(value, str) and not value.strip():
             return None
         return value
+
+    @field_validator("prompt_variant", mode="before")
+    @classmethod
+    def _known_variant(cls, value):
+        v = (value or "current").strip().lower() if isinstance(value, str) else value
+        if v not in PROMPT_VARIANTS:
+            raise ValueError(f"PROMPT_VARIANT must be one of {', '.join(PROMPT_VARIANTS)}")
+        return v
 
     model_config = SettingsConfigDict(
         env_file=BASE_DIR / ".env",
