@@ -858,6 +858,56 @@ playlist is past `--since` (2 consecutive older entries). The 1,202-entry AI
 Daily Brief playlist with `--limit 3` reads 3 entries; `--since` a few days
 back reads ~7. Metadata fetched while selecting is reused for the run.
 
+A/B note: one opus run varies by up to ±20 % in section length on the same
+transcript (AI Daily Brief Stage 2), so compare prompt variants with at least
+2 runs per arm.
+
+### Indexing a whole playlist (free)
+
+```bash
+playlist-index "<playlist url>" --out "<vault>/010_learning_system/by_subject/<subject>/_index.md"
+playlist-index "<playlist url>" --out … --max-fetches 200    # in batches; rerun continues
+```
+
+One Obsidian note listing every episode: # · date · duration · title (YouTube
+link) · status (`packaged` links the package, `notes` = a run dir has notes,
+`unavailable` = private/removed) · the description's first sentence. No model
+call. The flat listing (~6 s for 1,202 entries) has no dates, so each entry's
+watch page is read once (~0.8 s, plus a 1 s polite pause; backoff on 429)
+and cached in `previous_run_results/_playlist_cache/<playlist_id>.json`;
+reruns fetch only new or missing entries. Measured on the AI Daily Brief:
+1,202 entries, 1,196 dated, 6 private/removed, 45 min for the first build,
+6 s for a rebuild from cache.
+
+### Week / month digests over existing notes
+
+```bash
+digest --collection ai_daily_brief --by week                  # subject name or a directory
+digest --collection ai_daily_brief --by month --since 2026-10-01
+```
+
+Reads finished episode notes (packages or run dirs), never transcripts.
+Writes `<collection>/digests/<YYYY-Www>.md` or `<YYYY-MM>.md`:
+
+- **Model-written (one call per span):** top stories ranked by episodes ×
+  minutes; threads across days; who mattered this span; open questions; what
+  changed since the previous digest.
+- **Deterministic:** the People table (merged across episodes), key terms new
+  this span, time-sensitive claims with "(superseded)" marking, and every link.
+
+Every model statement cites `E<n> H:MM:SS`. Citations are checked against the
+episode notes' own timestamps (±30 s), and uncited items are dropped. The
+frontmatter carries `citations`, `citations_dropped` and `link_check`.
+
+Caching and reruns:
+
+- A rerun with the same episodes makes no call and rewrites nothing.
+- A span over budget is map-reduced.
+- A month reuses that month's week digests and makes one reduce call.
+
+A span that is not over yet is labelled partial. Design:
+`design/DIGESTS.md`.
+
 ## Development
 If you want to modify the code or run tests locally, you'll need a local Python environment.
 
