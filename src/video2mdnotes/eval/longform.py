@@ -533,9 +533,38 @@ class Glossary:
         return [(m.start(), m.group(0)) for m in self.pattern.finditer(text)]
 
 
+# Sections that list mishearings ON PURPOSE (heard -> probable): a glossary
+# "wrong" form there is the record of the fix, not a residual mishearing. The
+# Stage 3 AIDB run failed P6 on SX9LQD3yINg for exactly this row.
+P6_SKIP_SECTIONS = ("transcription uncertainty",)
+_MD_HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
+
+
+def _p6_lines(nf: NotesFile) -> list[tuple[int, str]]:
+    """Body lines minus the sections in P6_SKIP_SECTIONS (each runs to the
+    next heading of the same or a higher level; code fences respected)."""
+    out: list[tuple[int, str]] = []
+    skip_level: int | None = None
+    fenced = False
+    for no, line in body_lines(nf):
+        if re.match(r"^\s*(```|~~~)", line):
+            fenced = not fenced
+        elif not fenced and (m := _MD_HEADING.match(line)):
+            level = len(m.group(1))
+            if skip_level is not None and level <= skip_level:
+                skip_level = None
+            title = re.sub(r"\[[^\]]*\](\([^)]*\))?", "", m.group(2)).strip(" *_`:").lower()
+            if skip_level is None and any(title.startswith(s) for s in P6_SKIP_SECTIONS):
+                skip_level = level
+                continue
+        if skip_level is None:
+            out.append((no, line))
+    return out
+
+
 def scan_notes_glossary(nf: NotesFile, glossary: Glossary) -> list[dict[str, Any]]:
     hits = []
-    for no, line in body_lines(nf):
+    for no, line in _p6_lines(nf):
         for _, found in glossary.scan(line):
             hits.append(
                 {

@@ -328,3 +328,32 @@ def test_p3_excuses_only_measured_silence(tmp_path):
     r = check_p3(measured)
     assert r["pass"], r
     assert "measured silence" in r["summary"]
+
+
+# --- P6 ignores the Transcription Uncertainty section (WP-P2) ------------------
+
+
+def _nf(text: str) -> "lf.NotesFile":
+    return lf.NotesFile(path=Path("notes.summary.md"), text=text, frontmatter=None, body_offset=1)
+
+
+def test_p6_ignores_transcription_uncertainty_section():
+    """SX9LQD3yINg (Stage 3): the notes' own uncertainty row "Cloud Code ->
+    Claude Code" records the mishearing on purpose; it is not a residual."""
+    gl = lf.Glossary.load()
+    text = (
+        "# Notes\n\n## Window 1 [0:00–0:10]\n\n- Claude Code ships agents [0:00:05]\n\n"
+        "## Transcription Uncertainty\n\n"
+        "| timestamp | heard | probable | confidence |\n|---|---|---|---|\n"
+        "| [0:00:05] | Cloud Code | Claude Code | high |\n\n"
+        "### Names not verified\n\n- Cloud Code was heard once\n\n"
+        "## Fact-Checked Notes\n\n- None\n"
+    )
+    assert lf.scan_notes_glossary(_nf(text), gl) == []
+    # the same form outside the section is still a hit
+    hits = lf.scan_notes_glossary(_nf(text + "\n## Later\n\n- Cloud Code again [0:00:06]\n"), gl)
+    assert [h["found"].lower() for h in hits] == ["cloud code"]
+    # a heading with a linked range is still recognised (package notes)
+    linked = text.replace("## Transcription Uncertainty",
+                          "## Transcription Uncertainty [0:00–0:10](https://youtu.be/x)")
+    assert lf.scan_notes_glossary(_nf(linked), gl) == []
