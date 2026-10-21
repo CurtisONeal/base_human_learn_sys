@@ -189,3 +189,21 @@ def test_sources_index_ranks_listen_read_queue(tmp_path):
     assert "| outlet | 3 | 2 | 2026-10-14 | 2026-10-20 |" in row
     assert res.sources[0] == {"source": "The Information", "times": 3, "episodes": 2}
     assert not res.link_problems
+
+
+def test_role_refs_skip_named_and_keep_multiword_orgs(tmp_path):
+    vault = tmp_path / "vault" / "subj"
+    body = ("- Brian Moynihan is Bank of America's CEO, per model knowledge [0:02:00]\n"
+            "- The late-2023 ousting of OpenAI's CEO shook the deal [0:03:00]\n"
+            "- Bank of America's CEO warned about rates [0:04:00]\n"
+            "- JPMorgan's CEO is Jamie Dimon [0:05:00]\n")
+    p = _ep(vault, "ep1", "AAAAAAAAAAA", "2026-10-16", [("NLW", "host", "Host", "-", "[0:01:00]")], body=body)
+    refs = ap.find_role_refs(ap._episodes_from([p]))
+    assert sorted(r.phrase for r in refs) == ["Bank of America's CEO", "OpenAI's CEO"]
+
+
+def test_possessive_role_is_not_a_reference(tmp_path):
+    vault = tmp_path / "vault" / "subj"
+    body = "- A report under the President's executive order, by the President's Council [0:02:00]\n"
+    p = _ep(vault, "ep1", "AAAAAAAAAAA", "2026-10-16", [("NLW", "host", "Host", "-", "[0:01:00]")], body=body)
+    assert ap.find_role_refs(ap._episodes_from([p])) == []

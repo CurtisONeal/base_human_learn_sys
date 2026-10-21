@@ -287,12 +287,18 @@ _TITLES = (
     r"Prime Minister|Chancellor|SEC [Cc]hair(?:man|woman)?|FTC [Cc]hair(?:man|woman)?|"
     r"(?:White House )?AI czar|Surgeon General|Pope")
 _NATION = r"(?:U\.S\.|US|American|British|UK|German|French|Japanese|Chinese|Indian|Canadian|Korean|Taiwanese) "
-_NOT_NAMED = r"(?![\w-])(?!,?\s+(?:[A-Z][a-z'’-]+\s+){1,2}[A-Z][a-z'’-]+)"
+# not followed by a name, and not a possessive ("the President's Council" is
+# an organisation; annotating before "'s" would break the phrase)
+_NOT_NAMED = r"(?![\w-])(?!['’]s\b)(?!,?\s+(?:[A-Z][a-z'’-]+\s+){1,2}[A-Z][a-z'’-]+)"
 ROLE_A = re.compile(rf"\b(?P<p>[Tt]he (?:{_NATION})?(?:{_TITLES})(?: of (?:the )?[A-Z][\w&.-]+(?: [A-Z][\w&.-]+)?)?){_NOT_NAMED}")
 ROLE_B = re.compile(
-    r"\b(?P<p>(?P<org>[A-Z][\w&.-]+(?: [A-Z][\w&.-]+){0,2})['’]s (?:CEO|CTO|CFO|COO|chief executive|"
+    r"\b(?P<p>(?P<org>[A-Z][\w&.-]+(?: (?:of |and |& )?[A-Z][\w&.-]+){0,3})['’]s (?:CEO|CTO|CFO|COO|chief executive|"
     r"chief scientist|founder|co-founder|cofounder|president|chair(?:man|woman)?|head of [a-z]+))"
     + _NOT_NAMED)
+_NAME = r"[A-Z][\w'’.-]+(?: [A-Z][\w'’.-]+)+"
+# "Brian Moynihan is Bank of America's CEO" / "the CEO, Jane Roe" — already named.
+_NAMED_BEFORE = re.compile(rf"{_NAME},? (?:is|was|as|became|remains) (?:now |still )?$")
+_NAMED_AFTER = re.compile(rf"^,? (?:is|was|remains) (?:now |still )?{_NAME}|^ \({_NAME}\)")
 _ORG_STOP = {"The", "It", "This", "That", "He", "She", "They", "Its", "Their", "His", "Her", "One"}
 ANNOT = re.compile(r"\s\(→ (?:[^()\n]|\([^()\n]*\))*?per model knowledge(?:[^()\n]|\([^()\n]*\))*?\)")
 
@@ -347,6 +353,8 @@ def _role_matches(line: str) -> List[re.Match]:
     for rx in (ROLE_A, ROLE_B):
         for m in rx.finditer(line):
             if rx is ROLE_B and m.group("org").split()[0] in _ORG_STOP:
+                continue
+            if _NAMED_BEFORE.search(line[:m.start()]) or _NAMED_AFTER.search(line[m.end():]):
                 continue
             out.append(m)
     return out
@@ -517,6 +525,9 @@ def render_person(p: PersonEntry, rec: Optional[Dict[str, Any]], pdir: Path,
           f"generated_by: {GENERATOR}",
           "tags: [person]", "---"]
     md = [f"# {p.name}", ""]
+    if canonical and people_mod.name_key(canonical) != people_mod.name_key(p.name):
+        md += [f"_Probable spelling, {MODEL_KNOWLEDGE}: **{canonical}**. The notes use the "
+               f"transcript's spelling._", ""]
     label = (f"Description — {MODEL_KNOWLEDGE}" if kind == "model" else "Description")
     md += [f"## {label}", "", desc, ""]
     if kind == "model":

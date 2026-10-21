@@ -77,13 +77,17 @@ class Source:
 
 def bare_name(name: str) -> str:
     s = _HEDGE.sub("", name or "")
-    s = s.replace("*", "").replace("`", "").replace("_", " ").strip(" .,;:\"'“”")
+    s = s.replace("*", "").replace("`", "").strip(" .,;:")
+    # Quotes are part of a title ("Personality and Persuasion"): strip a pair
+    # only when it wraps the whole name, never one side.
+    if len(s) > 1 and s[0] in "\"“" and s[-1] in "\"”" and s.count('"') + s.count("“") + s.count("”") == 2:
+        s = s[1:-1]
     return " ".join(s.split())
 
 
 def source_key(name: str) -> str:
     """Normalised identity of a source name."""
-    s = bare_name(name).lower().replace("’", "'").replace("&", " and ")
+    s = bare_name(name).lower().replace("’", "'").replace("&", " and ").replace("_", " ")
     s = re.sub(r"[^\w' ]+", " ", s)
     s = " ".join(s.split())
     s = re.sub(r"^the\s+", "", s)

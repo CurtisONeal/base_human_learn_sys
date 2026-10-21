@@ -180,3 +180,13 @@ def test_digest_sources_of_the_week_merged_with_counts_and_links(tmp_path):
     assert "](https://youtu.be/AAAAAAAAAAA?t=60)" in rows[0]
     out_dir.mkdir()
     assert dg.check_digest_links(md, out_dir, span.episodes) == []
+
+
+def test_quoted_titles_keep_their_quotes():
+    rows = cs.parse_rows(_table(
+        ('"Personality and Persuasion" (Ethan Mollick)', "blog", "host", "x.", "-", "[0:01:00]"),
+        ('Claire Vaux video "I hate Opus V"', "video", "host", "y.", "-", "[0:02:00]"),
+        ('"Stratechery"', "newsletter", "host", "z.", "-", "[0:03:00]")))
+    merged, _ = cs.merge_sources(rows)
+    assert [s.shown for s in merged] == ['"Personality and Persuasion" (Ethan Mollick)',
+                                         'Claire Vaux video "I hate Opus V"', "Stratechery"]

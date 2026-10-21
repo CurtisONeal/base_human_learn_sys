@@ -61,3 +61,34 @@ nothing new: 0 calls, every file byte-identical.
 Listen/read next: sources ranked by times cited + episodes + a 30-day
 recency bonus; podcasts/shows/videos/talks are "listen", the rest "read".
 Candidate inputs only — what each was cited for is as the episodes state.
+
+## Real run (2026-10-21)
+
+Subscription chain only (`claude-cli/opus` → `claude-cli/sonnet`,
+`ALLOW_METERED_FALLBACK=false`, `--usd-cap 0`); every call served by opus.
+
+- **FSX5JFJS9PQ re-summarized** from its Stage 2 transcript (copy in
+  `previous_run_results/AB_aidb/wp_p2/ep1_FSX5JFJS9PQ`, no ASR): 1 passage call
+  (2 windows packed). One `## Sources Referenced`, 15 sources (posts on X and
+  Reddit, The Information, Axios, a DOJ filing, a DHS memo, the Artificial
+  Analysis personality bench, a blog essay, a video), 0 people rows among them.
+  Eval P1–P7 all PASS (255/255 citations). Packaged: 255/255 linked, 0 broken.
+- **W43 digest rebuilt:** 1 call, 140 citations kept, 0 dropped,
+  `link_check: pass`; new "Sources of the week" (15 rows, linked).
+- **annotate-people ai_daily_brief** (7 episodes W42+W43, 2 digests):
+  124 unique people, **7 calls** (ceil(124/20)), 79 known / 44 "no reliable
+  model knowledge" / 1 flagged private (no note); 37 ASR spellings got a
+  probable spelling (Dario Amade → Dario Amodei, Shamath Palahapatia →
+  Chamath Palihapitiya …). Role references: "OpenAI's CEO" → Sam Altman
+  (high; verify — after cutoff 2026-06). Rerun: 0 calls, all files
+  byte-identical. Link check: 0 problems over 126 files per root; all 7
+  packages 0 broken links.
+- **Caught by the real run, fixed:** "the President's executive order"
+  matched "the President" and got annotated before "'s" (possessives are now
+  excluded; the one bad annotation was removed by hand); "Brian Moynihan is
+  Bank of America's CEO" was a candidate although named (named-before/after
+  filter; multi-word orgs with "of"); quoted titles lost one quote in the
+  sources merge.
+- **Known interaction:** annotating a package's notes.md changes its hash, so
+  a later `package` of the same episode keeps the vault copy ("user-edited")
+  unless `--force`; re-run `annotate-people` after a forced re-package.
