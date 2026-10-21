@@ -1093,9 +1093,13 @@ def remaining(col: Collection, package: bool = True, max_attempts: int = DEFAULT
 
 def estimate_remaining(col: Collection, items: Sequence[Dict[str, Any]]) -> Tuple[int, float]:
     """(calls, minutes) for `items`; minutes use the median observed wall time
-    per media-minute when this collection has finished items."""
-    calls = sum(estimate_calls(i.get("duration_s")) for i in items
-                if not summary_file(item_run_dir(col, i)))
+    per media-minute when this collection has finished items. Items with notes
+    or with an existing package in the subject folder cost nothing."""
+    sd = col.data.get("vault_subject_dir")
+    sd = Path(sd) if sd else None
+    items = [i for i in items if not summary_file(item_run_dir(col, i))
+             and (i["state"] == "packaged" or find_package(sd, i["id"]) is None)]
+    calls = sum(estimate_calls(i.get("duration_s")) for i in items)
     observed = [i["wall_s"] / max(1.0, (i.get("duration_s") or 1200) / 60)
                 for i in col.items.values()
                 if i.get("wall_s") and i["state"] in ("noted", "packaged") and not i.get("reused")]
@@ -1145,17 +1149,28 @@ def render_status(col: Collection, *, next_n: int = 5) -> str:
     return "\n".join(lines)
 
 
-def render_selection(col: Collection, matched: Sequence[Dict[str, Any]], f: Filters) -> str:
-    todo = [e for e in matched if (col.items.get(e["id"]) or {}).get("state") not in ("packaged",)]
+def render_selection(col: Collection, matched: Sequence[Dict[str, Any]], f: Filters,
+                     subject_dir: Optional[Path] = None) -> str:
+    """The matches with their state; `packaged*` = a package for the id
+    already exists in `subject_dir` (it will be adopted, not re-made)."""
+    states: Dict[str, str] = {}
+    for e in matched:
+        st = (col.items.get(e["id"]) or {}).get("state", "new")
+        if st != "packaged" and find_package(subject_dir, e["id"]) is not None:
+            st = "packaged*"
+        states[e["id"]] = st
+    todo = [e for e in matched if not states[e["id"]].startswith("packaged")]
     est = sum(estimate_calls(e.get("duration_s")) for e in todo
               if not summary_file(item_run_dir(col, col.items.get(e["id"]) or
                                                 {"id": e["id"], "published": e.get("published")})))
     total_s = sum(e.get("duration_s") or 0 for e in matched)
+    reuse = len(matched) - len(todo)
     lines = [f"Selection: {f.describe()} -> {len(matched)} episode(s), {_hms(total_s)} of media; "
-             f"est. {est} model call(s) for items without notes",
+             f"{reuse} already packaged (reused); est. {est} model call(s) for the "
+             f"{len(todo)} to do",
              f"{'#':>5}  {'date':<10}  {'id':<11}  {'dur':>7}  {'state':<11}  title"]
     for e in matched:
-        st = (col.items.get(e["id"]) or {}).get("state", "new")
+        st = states[e["id"]]
         lines.append(f"{e.get('index') or '':>5}  {e.get('published') or '?':<10}  {e['id']:<11}  "
                      f"{_hms(e.get('duration_s')):>7}  {st:<11}  {e.get('title') or ''}")
     return "\n".join(lines)

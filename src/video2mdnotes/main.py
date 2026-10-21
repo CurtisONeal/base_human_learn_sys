@@ -1785,7 +1785,7 @@ def collection_select(
         console.print("[red]No listing yet: run `collection init` (or --refresh)[/red]")
         raise typer.Exit(2)
     matched = cm.select_entries(entries, f)
-    typer.echo(cm.render_selection(col, matched, f))
+    typer.echo(cm.render_selection(col, matched, f, subject_dir=_subject_dir(col.subject)))
     if dry_run:
         return
     try:
