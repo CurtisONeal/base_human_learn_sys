@@ -22,3 +22,10 @@
 ## Pending decisions for the user
 - Document-path fix (short docs as one passage + unclosed code-fence check) — asked, no answer yet.
 - User action: Obsidian Sync → exclude `__sources`.
+
+## 2026-10-20 · AI Daily Brief track (user plan, staged)
+- Stage 1 (running, agent branch from main): People section in summary prompts (+ `--prompt-variant legacy|current`), `process --limit/--items/--since/--until/--dry-run-list`, real A/B on newest 2 AIDB episodes → `previous_run_results/AB_aidb/AB_REPORT.md`.
+- Stage 2 (after Stage 1 passes): real run newest 3; free index of all 1,202 episodes → vault note; span summarizer (weekly/monthly digest over per-episode notes) — design + implement.
+- Stage 3: general batch-selection/run process for large playlists; then test: last week of AIDB with People + a week digest.
+- Playlist: https://www.youtube.com/playlist?list=PLRYSuzHGhXPmKnOpd-f588cNNmTe2S9FP — 1,202 entries, 272 h, median 11 min, newest first.
+- main is 4 commits ahead of origin (user pushes).
