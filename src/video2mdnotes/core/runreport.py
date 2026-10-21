@@ -44,6 +44,9 @@ class RunReport:
     source: str
     started: str = field(default_factory=_now)
     runs: List[dict] = field(default_factory=list)
+    # Why a run stopped, for a parent process (`collection run`) to act on:
+    # {"stop_reason": "subscription_exhausted" | "budget", "reset_at": iso}.
+    extra: dict = field(default_factory=dict)
 
     def add(self, run_dir: Path, status: str, source: Optional[str] = None) -> None:
         """Record one run dir. A later entry for the same dir replaces the
@@ -81,6 +84,7 @@ class RunReport:
             "finished": _now(),
             "status": status or self.overall(),
             "runs": list(self.runs),
+            **({"extra": dict(self.extra)} if self.extra else {}),
         }
 
     def emit(self, status: Optional[str] = None, stream=None) -> dict:

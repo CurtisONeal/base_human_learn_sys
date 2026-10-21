@@ -390,10 +390,13 @@ def longform(
         console.print(f"[yellow]Stopped (subscription exhausted):[/yellow] {exc}\n"
                       "Completed passages are checkpointed; re-run to resume.")
         status = "stopped"
+        report.extra.update(stop_reason="subscription_exhausted",
+                            reset_at=exc.reset_at.isoformat() if exc.reset_at else None)
     except BudgetExhausted as exc:
         console.print(f"[yellow]Stopped (spend cap):[/yellow] {exc}\n"
                       "Completed passages are checkpointed; re-run to resume.")
         status = "stopped"
+        report.extra.update(stop_reason="budget")
     except lf.LongformIncomplete as exc:
         console.print(f"[red]Incomplete:[/red] {exc}")
     if out_dir.exists():
@@ -1455,6 +1458,8 @@ def process(
             # rather than burn the rest of the playlist on failures or spend.
             logger.error(f"[{position}] Subscription exhausted: {e}")
             stopped_at = f"{position} — {source.title}"
+            report.extra.update(stop_reason="subscription_exhausted",
+                                reset_at=e.reset_at.isoformat() if e.reset_at else None)
             report.add(project_dir, "stopped", source.url)
             break
         except BudgetExhausted as e:
@@ -1462,6 +1467,7 @@ def process(
             # re-run after raising the cap resumes from here.
             logger.error(f"[{position}] Spend cap reached: {e}")
             stopped_at = f"{position} — {source.title} (spend cap)"
+            report.extra.update(stop_reason="budget")
             report.add(project_dir, "stopped", source.url)
             break
         except KeyboardInterrupt:
@@ -1665,6 +1671,262 @@ def digest_cmd(
         raise typer.Exit(1)
 
 
+collection_app = typer.Typer(help="Batch-process a large playlist or URL list with resume "
+                                  "(see design/COLLECTIONS.md)")
+app.add_typer(collection_app, name="collection")
+
+COLLECTION_ROOT_HELP = "Where collections live (default OUTPUT_DIR/collections)"
+
+
+def _collection_root(root) -> Path:
+    return Path(root).expanduser() if root else settings.output_dir / "collections"
+
+
+def _load_collection(name: str, root):
+    from video2mdnotes.core import collection as cm
+    try:
+        return cm.Collection.load(_collection_root(root), name)
+    except cm.CollectionError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2)
+
+
+def _subject_dir(subject: str | None) -> Path | None:
+    if not subject:
+        return None
+    return settings.obsidian_vault / settings.learning_root / subject
+
+
+@collection_app.command("init")
+def collection_init(
+    name: str = typer.Argument(..., help="Collection name, e.g. ai_daily_brief"),
+    playlist: str = typer.Option(None, "--playlist", help="Playlist URL"),
+    urls_file: Path = typer.Option(None, "--urls-file", help="Text file: one video URL per line"),
+    subject: str = typer.Option(None, "--subject", help="Package subject (vault folder)"),
+    root: Path = typer.Option(None, "--root", help=COLLECTION_ROOT_HELP),
+    index_note: Path = typer.Option(None, "--index-note",
+                                    help="playlist-index note refreshed after runs (default "
+                                         "<vault subject>/_index.md when it exists)"),
+    no_fetch: bool = typer.Option(False, "--no-fetch",
+                                  help="Flat listing + cached dates only (no watch-page reads)"),
+):
+    """Create (or refresh) a collection and its listing.
+
+        collection init ai_daily_brief --playlist https://www.youtube.com/playlist?list=… --subject ai_daily_brief
+
+    Network: one flat playlist listing plus one watch-page read per episode NOT
+    already in the playlist-index cache. Re-running refreshes the listing.
+    """
+    from video2mdnotes.core import collection as cm
+    if bool(playlist) == bool(urls_file):
+        console.print("[red]Give exactly one of --playlist or --urls-file[/red]")
+        raise typer.Exit(2)
+    if playlist:
+        sources = [{"kind": "playlist", "url": playlist}]
+    else:
+        urls = [ln.strip() for ln in Path(urls_file).expanduser().read_text(encoding="utf-8").splitlines()
+                if ln.strip() and not ln.strip().startswith("#")]
+        sources = [{"kind": "urls", "urls": urls}]
+    sdir = _subject_dir(subject)
+    if index_note is None and sdir is not None and (sdir / "_index.md").exists():
+        index_note = sdir / "_index.md"
+    try:
+        col = cm.Collection.create(_collection_root(root), name, subject=subject, sources=sources,
+                                   index_note=index_note, vault_subject_dir=sdir)
+        entries = cm.build_listing(col, output_root=settings.output_dir, fetch=not no_fetch,
+                                   progress=lambda m: console.print(f"[dim]{m}[/dim]", highlight=False))
+    except (cm.CollectionError, ValueError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2)
+    col.save()
+    dated = sum(1 for e in entries if e.get("published"))
+    console.print(f"[green]Collection:[/green] {col.path}\n{len(entries)} entries in listing "
+                  f"({dated} dated) · {len(col.items)} item(s) in manifest", highlight=False)
+
+
+@collection_app.command("select")
+def collection_select(
+    name: str = typer.Argument(...),
+    since: str = typer.Option(None, "--since", help="Published on/after YYYY-MM-DD"),
+    until: str = typer.Option(None, "--until", help="Published on/before YYYY-MM-DD"),
+    last_days: int = typer.Option(None, "--last-days", help="Published in the last N days "
+                                  "(since = as-of minus N days, until = as-of)"),
+    as_of: str = typer.Option(None, "--as-of", help="Reference date for --last-days (default today)"),
+    limit: int = typer.Option(None, "--limit", help="First N matches in playlist order"),
+    items: str = typer.Option(None, "--items", help='Playlist positions: "1-3,7", "10-"'),
+    match: str = typer.Option(None, "--match", help="Regex on title or description (case-insensitive)"),
+    min_duration: str = typer.Option(None, "--min-duration", help="e.g. 10m, 1h, 1:00:00, 15 (min)"),
+    max_duration: str = typer.Option(None, "--max-duration"),
+    order: str = typer.Option("oldest", "--order", help="Queue order: oldest (default) or newest first"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="List the matches; change nothing"),
+    no_queue: bool = typer.Option(False, "--no-queue", help="Record as selected, not queued"),
+    replace: bool = typer.Option(False, "--replace",
+                                 help="Drop never-started queued items that no longer match"),
+    refresh: bool = typer.Option(False, "--refresh", help="Re-list the playlist first (network)"),
+    root: Path = typer.Option(None, "--root", help=COLLECTION_ROOT_HELP),
+):
+    """Select episodes from the cached listing into the queue. No network
+    (unless --refresh). Items already done keep their state."""
+    from video2mdnotes.core import collection as cm
+    from video2mdnotes.core.playlist import parse_date
+    col = _load_collection(name, root)
+    try:
+        f = cm.Filters(since=parse_date(since, "--since"), until=parse_date(until, "--until"),
+                       last_days=last_days, as_of=parse_date(as_of, "--as-of"), limit=limit,
+                       items=items, match=match,
+                       min_duration_s=cm.parse_duration(min_duration),
+                       max_duration_s=cm.parse_duration(max_duration))
+        entries = (cm.build_listing(col, output_root=settings.output_dir) if refresh
+                   else cm.load_listing(col))
+    except (ValueError, re.error) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2)
+    if not entries:
+        console.print("[red]No listing yet: run `collection init` (or --refresh)[/red]")
+        raise typer.Exit(2)
+    matched = cm.select_entries(entries, f)
+    typer.echo(cm.render_selection(col, matched, f))
+    if dry_run:
+        return
+    try:
+        r = cm.apply_selection(col, matched, f, order=order, queue=not no_queue, replace=replace)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2)
+    console.print(f"{r['added']} added, {r['requeued']} re-queued, {r['removed']} removed · "
+                  f"manifest {col.path}", highlight=False)
+
+
+@collection_app.command("status")
+def collection_status(
+    name: str = typer.Argument(...),
+    next_n: int = typer.Option(5, "--next", help="How many next items to show"),
+    root: Path = typer.Option(None, "--root", help=COLLECTION_ROOT_HELP),
+):
+    """Counts per state, estimated calls/time remaining, next items, digests."""
+    from video2mdnotes.core import collection as cm
+    typer.echo(cm.render_status(_load_collection(name, root), next_n=next_n))
+
+
+@collection_app.command("adopt")
+def collection_adopt(
+    name: str = typer.Argument(...),
+    item_id: str = typer.Argument(..., help="YouTube id of a collection item"),
+    run_dir: Path = typer.Argument(..., help="Existing run dir with that episode's notes"),
+    root: Path = typer.Option(None, "--root", help=COLLECTION_ROOT_HELP),
+):
+    """Point an item at an existing run dir (reused, never re-summarized)."""
+    from video2mdnotes.core import collection as cm
+    col = _load_collection(name, root)
+    it = col.items.get(item_id)
+    run_dir = Path(run_dir).expanduser().resolve()
+    if it is None or not cm.summary_file(run_dir):
+        console.print("[red]Unknown item, or the run dir has no summaries/*.summary.md[/red]")
+        raise typer.Exit(2)
+    col.set_state(it, "noted", run_dir=str(run_dir), reused=True, **cm.run_metrics(run_dir))
+    console.print(f"{item_id} → {run_dir} (noted, reused)", highlight=False)
+
+
+@collection_app.command("run")
+def collection_run(
+    name: str = typer.Argument(...),
+    max_items: int = typer.Option(None, "--max-items", help="Process at most N items this run"),
+    max_calls: int = typer.Option(None, "--max-calls",
+                                  help="Stop before an item/digest would exceed N model calls"),
+    until_time: str = typer.Option(None, "--until-time", help="Start nothing after HH:MM"),
+    package: bool = typer.Option(False, "--package", help="Package each finished item "
+                                 "into the collection's subject"),
+    digest: str = typer.Option(None, "--digest", help="week | month: rebuild affected digests"),
+    max_attempts: int = typer.Option(3, "--max-attempts", help="Tries per item before failed"),
+    backoff: float = typer.Option(60.0, "--backoff", help="Retry backoff seconds (doubles)"),
+    retry_failed: bool = typer.Option(False, "--retry-failed", help="Retry items marked failed"),
+    evaluate: bool = typer.Option(True, "--eval/--no-eval", help="P1–P7 eval per item (no model)"),
+    as_of: str = typer.Option(None, "--as-of", help="Digest reference date (default today)"),
+    on_exhaustion: str = typer.Option(None, "--on-exhaustion", help="wait (default) | stop"),
+    usd_cap: float = typer.Option(None, "--usd-cap", help=USD_CAP_HELP),
+    prompt_variant: str = typer.Option(None, "--prompt-variant", help=PROMPT_VARIANT_HELP),
+    root: Path = typer.Option(None, "--root", help=COLLECTION_ROOT_HELP),
+):
+    """Process the queue: notes → package → affected digests. Resumable and
+    idempotent: finished items are skipped (existing packages adopted), limits
+    stop between items, a re-run continues. Prints
+    `COLLECTION_ITEM_DONE=<id> <dir>` per finished item,
+    `COLLECTION_DIGEST=<span> <path>` per digest, then RUN_DIR lines."""
+    from video2mdnotes.core import collection as cm
+    from video2mdnotes.core.playlist import parse_date
+    col = _load_collection(name, root)
+    if on_exhaustion:
+        settings.on_exhaustion = on_exhaustion.strip().lower()
+    _apply_usd_cap(usd_cap)
+    if digest and digest not in ("week", "month"):
+        console.print("[red]--digest must be week or month[/red]")
+        raise typer.Exit(2)
+    if package and not col.subject:
+        console.print("[red]--package needs a collection subject (collection init --subject)[/red]")
+        raise typer.Exit(2)
+    try:
+        limits = cm.Limits(max_items=max_items, max_calls=max_calls,
+                           deadline=cm.until_deadline(until_time), max_attempts=max_attempts,
+                           backoff_s=backoff, retry_failed=retry_failed)
+        ref = parse_date(as_of, "--as-of")
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2)
+    runner = cm.SubprocessRunner(col.logs_dir, usd_cap=usd_cap, prompt_variant=prompt_variant,
+                                 echo=lambda m: console.print(m, highlight=False, markup=False))
+    report = RunReport("collection run", name)
+    try:
+        s = cm.run_collection(
+            col, limits, runner=runner, package_subject=col.subject if package else None,
+            digest_by=digest, evaluate=evaluate,
+            vault_subject_dir=_subject_dir(col.subject), on_exhaustion=settings.on_exhaustion,
+            exhaustion_wait_s=settings.exhaustion_wait_seconds,
+            exhaustion_max_wait_s=settings.exhaustion_max_wait_seconds,
+            emit=lambda line: print(line, flush=True),
+            say=lambda m: console.print(m, highlight=False, markup=False), as_of=ref)
+    except cm.Locked as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(3)
+    if package and col.data.get("index_note"):
+        _refresh_collection_index(col)
+    for it in col.queue():
+        if it.get("run_dir") and (it["id"] in s.processed or it["id"] in s.reused):
+            report.add(Path(it["run_dir"]), "ok", it["url"])
+    report.extra.update(collection=str(col.path), stop_reason=s.stop_reason or None,
+                        processed=s.processed, reused=s.reused, failed=s.failed,
+                        calls=s.calls, digest_calls=s.digest_calls,
+                        digests=[d["path"] for d in s.digests])
+    console.print(f"[green]Done:[/green] {len(s.processed)} processed, {len(s.reused)} reused, "
+                  f"{len(s.packaged)} packaged, {len(s.failed)} failed · {s.calls} item call(s) + "
+                  f"{s.digest_calls} digest call(s)"
+                  + (f" · stopped: {s.stop_reason}" if s.stop_reason else ""), highlight=False)
+    report.emit("stopped" if s.stop_reason else None)
+    if s.failed or any(d["link_check"] != "pass" for d in s.digests):
+        raise typer.Exit(1)
+
+
+def _refresh_collection_index(col) -> None:
+    """Re-render the playlist-index note from the listing snapshot + cache (no network)."""
+    from video2mdnotes.core import collection as cm
+    from video2mdnotes.core import playlist_index as pi
+    src = next((x for x in col.data.get("sources", []) if x.get("kind") == "playlist"), None)
+    entries = cm.load_listing(col)
+    if not src or not entries:
+        return
+    top = {"id": src.get("playlist_id"), "title": src.get("title"),
+           "entries": [{"id": e["id"], "title": e["title"], "duration": e.get("duration_s")}
+                       for e in sorted(entries, key=lambda e: e["index"])]}
+    try:
+        res = pi.build_index(src["url"], cache_root=settings.output_dir / "_playlist_cache",
+                             max_fetches=0, list_fn=lambda _u: top)
+        out = Path(col.data["index_note"])
+        pi.apply_status(res, out, _subject_dir(col.subject), col.runs_dir)
+        out.write_text(pi.render_index(res), encoding="utf-8")
+        console.print(f"[dim]Index refreshed: {out}[/dim]", highlight=False)
+    except Exception as exc:  # noqa: BLE001 - the index is a convenience
+        console.print(f"[yellow]Index not refreshed:[/yellow] {exc}")
+
+
 # Registering a second command (`book`) made typer require a subcommand, which
 # would have silently broken every existing invocation — the readme, the
 # overnight sweep script, and any cron entry all call
@@ -1672,7 +1934,7 @@ def digest_cmd(
 # published interface as a side effect of adding a feature, an unrecognised
 # first argument is treated as a URL for `process`, exactly as before.
 _COMMANDS = {"process", "book", "catalog", "media", "longform", "package",
-             "playlist-index", "digest"}
+             "playlist-index", "digest", "collection"}
 
 
 def _with_default_command(argv: list[str]) -> list[str]:
