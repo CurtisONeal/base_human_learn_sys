@@ -100,6 +100,7 @@ _HEAD = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
 _EP_CITE = re.compile(rf"^\s*E(?P<n>\d+)\s*[,:@]?\s*\[?(?P<t>{_TS})\]?\s*$")
 _TERM = re.compile(r"^\s*[-*]\s+(?:`(?P<a>[^`]+)`|\*\*(?P<b>[^*]+)\*\*)\s*[-—–:]\s*(?P<def>.*)$")
 _CITE_ANY = re.compile(r"\[[^\[\]\n]+\]")
+_ANNOTATION = re.compile(r"\s\(→ (?:[^()\n]|\([^()\n]*\))*?per model knowledge(?:[^()\n]|\([^()\n]*\))*?\)")
 
 
 class DigestError(RuntimeError):
@@ -253,7 +254,10 @@ def load_episode(notes_path: Path) -> Optional[Episode]:
         duration = float(fm.get("duration_s") or meta.get("duration_s") or src.get("duration_s") or 0) or None
     except ValueError:
         duration = None
-    body = unlink_citations(body)
+    # annotate-people's "(→ name, as of …, per model knowledge)" notes are not
+    # the source's words: stripped, so the digest input (and cache key) stays
+    # what the episode said.
+    body = _ANNOTATION.sub("", unlink_citations(body))
     ep = Episode(notes_path=notes_path, title=fm.get("title") or meta.get("title") or notes_path.stem,
                  published=published, youtube_id=yid, url=url, duration_s=duration, body=body,
                  source_id=str(meta.get("source_id") or yid or ""),

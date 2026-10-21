@@ -1671,6 +1671,67 @@ def digest_cmd(
         raise typer.Exit(1)
 
 
+@app.command("annotate-people")
+def annotate_people_cmd(
+    target: str = typer.Argument(..., help="A run dir / package dir, a digest .md, or a collection name"),
+    collection: str = typer.Option(None, "--collection",
+                                   help="Write the indexes for this collection (its folder AND its "
+                                        "vault subject folder), over all its episodes"),
+    root: Path = typer.Option(None, "--root", help="Where collections live (default OUTPUT_DIR/collections)"),
+    max_calls: int = typer.Option(None, "--max-calls", help="Stop after N model calls (rest stays pending)"),
+    refresh: bool = typer.Option(False, "--refresh", help="Re-describe existing people and re-resolve roles"),
+    no_annotate: bool = typer.Option(False, "--no-annotate-notes",
+                                     help="Do not add role resolutions to the episode notes"),
+    as_of: str = typer.Option(None, "--as-of", help="Date for recency ranking (default today)"),
+    on_exhaustion: str = typer.Option(None, "--on-exhaustion"),
+    usd_cap: float = typer.Option(None, "--usd-cap", help=USD_CAP_HELP),
+):
+    """Person index + sources index after the summaries (design/ANNOTATE_PEOPLE.md).
+
+        annotate-people ai_daily_brief
+        annotate-people <vault>/…/digests/2026-W43.md --collection ai_daily_brief
+
+    Writes people/_index.md, people/<slug>.md, people/_resolutions.md and
+    sources/_index.md. Model calls: only NEW people (batched, 20 per call)
+    and vague role references; a rerun with nothing new makes 0 calls.
+    """
+    from video2mdnotes.core import annotate_people as ap
+    from video2mdnotes.core.longform import _default_complete
+    from video2mdnotes.core.playlist import parse_date
+
+    if on_exhaustion:
+        settings.on_exhaustion = on_exhaustion.strip().lower()
+    _apply_usd_cap(usd_cap)
+    try:
+        scope = ap.resolve_scope(target, collection=collection,
+                                 collection_root=_collection_root(root))
+        res = ap.run(scope, _default_complete, max_calls=max_calls, refresh=refresh,
+                     annotate=not no_annotate, as_of=parse_date(as_of, "--as-of"),
+                     progress=lambda m: console.print(f"[dim]{m}[/dim]", highlight=False))
+    except (ap.AnnotateError, ValueError) as exc:
+        console.print(f"[red]{type(exc).__name__}:[/red] {exc}")
+        raise typer.Exit(2)
+    except SubscriptionExhausted as exc:
+        console.print(f"[yellow]Stopped (subscription exhausted):[/yellow] {exc}\n"
+                      "Finished batches are saved; re-run to continue.")
+        raise typer.Exit(1)
+    except BudgetExhausted as exc:
+        console.print(f"[yellow]Stopped (spend cap):[/yellow] {exc}")
+        raise typer.Exit(1)
+    console.print(f"[green]people[/green]: {res.people} · newly described {res.new_described} · "
+                  f"calls {res.calls} ({', '.join(res.models) or 'none'}) · private/unnamed skipped "
+                  f"{res.skipped_private} · role references {len(res.roles)} · notes annotated "
+                  f"{res.notes_annotated} · sources {len(res.sources)} · files written "
+                  f"{len(res.written)}" + (f" · STOPPED: {res.stopped}" if res.stopped else ""),
+                  highlight=False)
+    for r in res.roots:
+        console.print(f"ANNOTATE_ROOT={r}", highlight=False, markup=False)
+    for p in res.link_problems[:20]:
+        console.print(f"  link problem: {p}", highlight=False, markup=False)
+    if res.link_problems:
+        raise typer.Exit(1)
+
+
 collection_app = typer.Typer(help="Batch-process a large playlist or URL list with resume "
                                   "(see design/COLLECTIONS.md)")
 app.add_typer(collection_app, name="collection")
@@ -1934,7 +1995,7 @@ def _refresh_collection_index(col) -> None:
 # published interface as a side effect of adding a feature, an unrecognised
 # first argument is treated as a URL for `process`, exactly as before.
 _COMMANDS = {"process", "book", "catalog", "media", "longform", "package",
-             "playlist-index", "digest", "collection"}
+             "playlist-index", "digest", "collection", "annotate-people"}
 
 
 def _with_default_command(argv: list[str]) -> list[str]:
