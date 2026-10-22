@@ -150,3 +150,112 @@ served by `claude-cli/opus`; 0 model-knowledge calls (nothing new).
   yespress.io, happenstance.ai). The confidence + sources are in each note,
   so this is visible, not hidden.
 - Rerun: 0 model calls, 0 web calls, no file written. Link check: 0 problems.
+
+## Quote-first voices + role on date (WP-P4)
+
+User goal: find the people whose opinions are high-signal in the AI space,
+as sources; suggest a high-likelihood identity even when it is only an X
+account. And fix WP-P3's role answer, which identified the person in the
+sentence (the 2023 ousting) instead of the holder on the episode date.
+
+Three lookup kinds, each with its own prompt, cache key and normaliser; all
+share `--max-web-calls` (default 5), roles first:
+
+| kind | when | prompt | cache |
+|---|---|---|---|
+| role | role flagged verify (post-cutoff) and not yet checked for the date | `role_on_date.md` | `rec["role_check"]` |
+| person | a model bio flagged post-cutoff (WP-P3) | `web_lookup.md` | `rec["web"]` |
+| voice | no reliable model knowledge and no adopted WP-P3 identity; never private / pending / role-created | `voice_lookup.md` | `rec["voice"]` |
+
+### Voices (quote-first)
+
+| part | who |
+|---|---|
+| payload per target: names, claim (People-row relevance), notes sentences that mention the name, `exact_quotes` (quoted spans ≥3 words), `episodes` with topic (title) + window (7 days before), `handle_candidates` (one-token names; spoken handles "Faw for AI" → fawforai; "B on X" → too short) | deterministic (`voice_payload`) |
+| `queries`, in order: `site:x.com "<quote>" after:D-7 before:D+1` (≤2) → `site:x.com [multi-word name] <claim keywords> after… before…` → `x.com/<handle>` → `"<name>" <topic> AI` | deterministic (`voice_queries`) |
+| search, read ≤3 results (3 more only if all fail), report evidence items `{url, kind, date, login_wall, supports: bio/topic/quote}` | model |
+| tier from the evidence, never from the model's word: **confirmed** = handle/profile + `bio` evidence + the quote seen, `quote_url` among the evidence AND on their own x.com post/profile; **probable** = handle + `bio` + `topic` evidence (a quote seen elsewhere — someone's reply, an article — is probable); **unknown** otherwise. The model's tier is a ceiling (never upgraded); every downgrade gets a note | deterministic (`normalize_voice`; `enforce_voice_rules` is also re-applied to cached results on load) |
+| confirmed → description adopted ("Description — per web lookup D (confirmed identity)"); probable → an "## Identity" section (handle link, display/real name, affiliation + type, evidence links with kind/login wall/date), the description stays "No reliable model knowledge"; unknown → the note, plus "Possible candidate, not adopted: @x" if the model named one | deterministic |
+
+### AI voices table (`sources/_index.md`, both roots)
+
+Rows: people with ≥1 episode row whose role is quoted / cited / guest /
+speaker / author (never host), with an identity — voice tier confirmed or
+probable, or a model / web description — whose **bio** (the description,
+not what the notes say they talked about) matches an AI pattern. Columns:
+person (note link) · handle (profile link) · real name · affiliation (type)
+· tier · times quoted · distinct episodes · first/last quoted · recency
+(days) · quoted posts (quote / post evidence) · where quoted (YouTube
+timestamps) · score. Not ranked: quoted-but-unidentified (named in one
+line) and a count of identified-but-not-AI people.
+
+    signal score = Q × B × R × W
+      Q = times quoted   (citations on the person's quoted rows, ≥1 per row)
+      B = 1 + ln(distinct episodes)
+      R = 0.5 ^ (days since last quoted / 30)
+      W = lab 1.5 · researcher 1.4 · founder 1.3 · investor 1.2 · journalist 1.1 · other 1.0
+          (voice: the lookup's affiliation_type; otherwise the first rule that
+          matches the description: a named AI lab → lab; research/professor/
+          scientist → researcher; founder/CEO/engineer/developer → founder;
+          investor/VC → investor; journalist/writer/newsletter/podcast/analyst
+          → journalist)
+
+### Role on date
+
+| part | who |
+|---|---|
+| question: "Who held <role> at <org> on <date>?" (`role_parts`: "OpenAI's CEO" → CEO / OpenAI; "the UK Prime Minister" → Prime Minister / UK); the notes sentence goes in `context_sentence`, labelled "context only … not the question" | deterministic |
+| `last_confirmed` = model answer as of the knowledge cutoff; `evidence_window` = [date − 90 d, date]; `change_window` = [cutoff month, date] | deterministic |
+| holder + sources, each with its own date/kind/live; a change-check search ("<org> new <role>", "steps down", "appointed") → `changes` | model |
+| **confirmed** only if ≥1 source is dated inside the evidence window, or a change is dated inside it, or a live official leadership page while the episode is ≤90 days old (a live page shows today's holder); else **last confirmed <newest dated source ≤ episode date>** and verify stays | deterministic (`normalize_role_date`) |
+| a change dated after the last confirmation and ≤ the episode date wins (name = new holder; previous holder recorded; "answer named X; the change found wins" when the model's own answer disagreed); a change outside the window is ignored | deterministic |
+| a differing holder WITHOUT a recorded change = contradiction: model answer kept in state, shown with "?" and "model knowledge: X — verify" | deterministic (`apply_web_role`) |
+| a WP-P3 `rec["web"]` role answer (undated sources) never clears verify any more ("undated sources — verify"); the role is re-checked once | deterministic |
+| provenance in notes / index / log: "per web lookup D; [changed D2: X (event; previously Y);] confirmed by a source dated D3 \| last confirmed D3; sources: [host D](url), …" — inside the `(→ …)` annotation that digests strip | deterministic |
+
+Tests: `tests/test_annotate_voices.py` (quote-first queries, two-signal
+tiers, login wall → probable, own-post rule + cache re-evaluation,
+candidate, scoring/ranking, role question, date acceptance/rejection,
+change override, WP-P3 role migration, cache/idempotence, ≤5 calls,
+privacy); `tests/test_annotate_web.py` updated to the kind-aware mock.
+
+## Real run — WP-P4 (2026-10-21)
+
+Subscription chain only (`claude-cli/opus` → `claude-cli/sonnet`,
+`ALLOW_METERED_FALLBACK=false`, `--usd-cap 0`), ai_daily_brief W42+W43
+(7 episodes, 2 digests). **4 web calls** in total (1 role + 3 voice, all
+served by `claude-cli/opus`), 0 model-knowledge calls. Run 1:
+`--max-web-calls 1` (the role); run 2: `--max-web-calls 3` (28 voice
+targets = the 27 WP-P3 "not found" + 1 WP-P3 low-confidence match, Alex
+Finn).
+
+- **Role "OpenAI's CEO" (2026-10-16): Sam Altman — confirmed by a source
+  dated 2026-09-14** (cnbc.com 2026-09-14, bloomberg.com 2026-09-03, an
+  undated unifygtm.com page); change check: no change found 2026-06 →
+  2026-10-16; the CLI's confidence: medium. Caveat (observed, from the
+  reply's own note): none of the 3 pages could be read (2 fetches got 403,
+  1 not tried) — the dates and statements come from search-result summaries
+  and URL paths. The WP-P3 answer (two 2023 articles about the ousting)
+  stays in state as history and no longer counts.
+- **Voices, the 27:** confirmed 2, probable 3, unknown 22 (Alex Finn, the
+  28th: unknown). Confirmed: Kyo → [@theo](https://x.com/theo) (the notes'
+  "Kyo" is the ASR form of Theo; the quote is on his own post), Websim
+  Surreya → [@kickingkeys](https://x.com/kickingkeys) (Surya, Websim).
+  Probable: George Cal → @georgevibing (quote seen only in a snippet of
+  @elonmusk's reply), Simon Smith → @_simonsmith (quote seen in a digg.com
+  write-up), Chetislua → @chetaslua (handle + AI posts; the topic evidence
+  is other accounts' posts in the thread). Every x.com evidence item was a
+  login-walled search snippet.
+- **Caught by the real run, fixed:** the CLI tagged George Cal and Simon
+  Smith "confirmed" with the quote seen on someone else's post / an article
+  → the own-post rule (`enforce_voice_rules`), re-applied to the cache with
+  0 calls; "Emil Michael is the U.S." (sentence split after "U.S.") →
+  `first_sentence`; the "lab" weight matched any mention of Google / Meta /
+  Microsoft, and a stated background made a judge "lab" → named AI labs
+  only, and the bio alone decides AI relevance and type.
+- **Known limits (observed):** Kyo (@theo) and Theo (model knowledge) are
+  the same person in two rows — a lookup does not merge index entries yet;
+  a description that mentions an AI event (Judge Alex G. Tse, an OpenAI
+  engineer's bail hearing) still counts as AI-related.
+- Rerun: 0 model calls, 0 web calls, 299 output .md files byte-identical
+  (sha256 over both roots); link check: 0 problems.

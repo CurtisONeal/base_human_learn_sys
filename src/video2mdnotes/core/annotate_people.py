@@ -44,6 +44,14 @@ overwritten. Never for private / unnamed / withheld rows or for confident
 pre-cutoff model knowledge. ``--no-web`` disables; ``--max-web-calls``
 caps (default ``MAX_WEB_CALLS``).
 
+**WP-P4.** Unknown quoted people get a quote-first "voice" lookup (queries
+from the attributed quote/claim + 7-day window + topic; tiers confirmed /
+probable / unknown decided here from the evidence); roles are asked only
+"Who held <role> at <org> on <date>?" and confirmed only on dated evidence
+(≤90 days before the episode, or a live official page), with a change
+check; ``sources/_index.md`` gains a ranked "AI voices" table
+(``signal_score``). See design/ANNOTATE_PEOPLE.md.
+
 **Privacy.** Rows whose role is a winner / attendee / audience member, names
 withheld by packaging, unnamed speakers, and anyone the model flags as a
 private individual get no person note (only a count in the index).
@@ -809,8 +817,10 @@ def normalize_web(x: Dict[str, Any], kind: str, as_of: dt.date, model: str) -> D
 
 
 _AFF_RX = [
-    ("lab", re.compile(r"\b(OpenAI|Anthropic|DeepMind|Google|Meta|Microsoft|xAI|Mistral|Nvidia|"
-                       r"Cohere|Hugging ?Face|Apple|Amazon|AWS|Cognition|Perplexity|Character\.?AI)\b")),
+    # an AI lab by name (a big-tech company only through its AI arm)
+    ("lab", re.compile(r"\b(OpenAI|Anthropic|DeepMind|Google AI|Google Brain|Meta AI|FAIR|Microsoft AI|"
+                       r"xAI|Mistral|Cohere|Hugging ?Face|Ai2|Allen Institute|Cognition|Perplexity|"
+                       r"Character\.?AI|Safe Superintelligence|Thinking Machines)\b")),
     ("researcher", re.compile(r"\b(research(?:er)?|professor|scientist|academic|PhD|lecturer|economist)\b", re.I)),
     ("founder", re.compile(r"\b(founder|co-?founder|CEO|chief executive|entrepreneur|builder|"
                            r"engineer|developer)\b", re.I)),
@@ -822,6 +832,18 @@ AI_RE = re.compile(r"\bAI\b|artificial intelligence|machine learning|\bML\b|\bLL
                    r"OpenAI|Anthropic|DeepMind|Gemini|Claude|ChatGPT|GPT|neural|deep learning|"
                    r"robotics|\bagents?\b|Nvidia|chips?\b|data cent(?:er|re)|compute|Hugging ?Face|"
                    r"Mistral|xAI|Cognition|Perplexity|prompt|vibe.?cod", re.I)
+
+
+_ABBREV_END = re.compile(r"(?:\b(?:[A-Z]\.){1,3}|\b(?:Mr|Ms|Mrs|Dr|Jr|Sr|St|Inc|Co|Corp|Ltd|vs|No)\.)$")
+
+
+def first_sentence(text: str) -> str:
+    """The first sentence, not split after "U.S." / "D.A." / "Inc."."""
+    t = " ".join(str(text or "").split())
+    for m in re.finditer(r"[.!?](?=\s+[A-Z\"“(])", t):
+        if not _ABBREV_END.search(t[:m.end()]):
+            return t[:m.end()]
+    return t
 
 
 def classify_affiliation(text: str) -> str:
@@ -838,6 +860,26 @@ def _clean_handle(h: Any) -> str:
     s = re.sub(r"^https?://(?:www\.)?(?:x|twitter)\.com/", "", s, flags=re.I).lstrip("@").split("/")[0]
     s = s.split("?")[0]
     return s if re.fullmatch(r"[A-Za-z0-9_]{1,15}", s) else ""
+
+
+def own_post(url: str, handle: str) -> bool:
+    """The URL is the person's own x.com / twitter.com profile or post."""
+    return bool(handle) and bool(re.match(
+        rf"^https?://(?:www\.|mobile\.)?(?:x|twitter)\.com/{re.escape(handle)}(?:[/?#]|$)", url or "", re.I))
+
+
+def enforce_voice_rules(v: Dict[str, Any]) -> Dict[str, Any]:
+    """Rules applied to a stored voice result (also to results cached before
+    a rule existed — deterministic, no web call): "confirmed" needs the quote
+    on their OWN post/profile; a quote seen on someone else's post or in an
+    article is "probable"."""
+    if v.get("tier") == "confirmed" and not own_post(v.get("quote_url", ""), v.get("handle", "")):
+        v = dict(v, tier="probable")
+        host = _url_label(v.get("quote_url") or "") or "another page"
+        why = f"quote seen on {host}, not on their own post — probable"
+        if why not in (v.get("note") or ""):
+            v["note"] = ((v.get("note") or "") + "; " if v.get("note") else "") + why
+    return v
 
 
 def normalize_voice(x: Dict[str, Any], as_of: dt.date, model: str) -> Dict[str, Any]:
@@ -897,7 +939,13 @@ def normalize_voice(x: Dict[str, Any], as_of: dt.date, model: str) -> Dict[str, 
     if atype not in AFF_TYPES:
         atype = classify_affiliation(aff + " " + str(x.get("description") or ""))
     keep = tier != "unknown"
-    return {"tier": tier, "handle": handle if keep else "", "profile_url": profile if keep else "",
+    candidate = {}
+    if not keep and (handle or profile):
+        candidate = {"handle": handle, "profile_url": profile, "claimed_tier": claimed,
+                     "display_name": " ".join(str(x.get("display_name") or "").split())[:80]}
+    return enforce_voice_rules({
+            "tier": tier, "candidate": candidate,
+            "handle": handle if keep else "", "profile_url": profile if keep else "",
             "display_name": " ".join(str(x.get("display_name") or "").split())[:80] if keep else "",
             "real_name": " ".join(str(x.get("real_name") or "").split())[:80] if keep else "",
             "affiliation": aff if keep else "", "affiliation_type": atype if keep else "",
@@ -906,7 +954,7 @@ def normalize_voice(x: Dict[str, Any], as_of: dt.date, model: str) -> Dict[str, 
             "login_wall_only": login_only and keep,
             "description": _sentences(x.get("description") or "", 2) if keep else "",
             "fallback_used": fallback and keep, "note": note,
-            "looked_up_at": as_of.isoformat(), "model": model}
+            "looked_up_at": as_of.isoformat(), "model": model})
 
 
 def normalize_role_date(x: Dict[str, Any], date: dt.date, last_confirmed: Optional[dt.date],
@@ -1173,7 +1221,7 @@ def _description(rec: Optional[Dict[str, Any]]) -> Tuple[str, str]:
 TIER_TEXT = {
     "confirmed": "confirmed — the quote was found on their post/profile, and the bio is AI-related",
     "probable": "probable — handle + AI-related bio + a post on the quoted topic around the date; "
-                "the quote itself was not found",
+                "the quote was not found on their own post",
 }
 
 
@@ -1201,15 +1249,18 @@ def voice_section(v: Dict[str, Any]) -> List[str]:
     """The quote-first identity (WP-P4), as its own section."""
     d = v.get("looked_up_at")
     if v.get("tier") not in ("confirmed", "probable"):
+        c = v.get("candidate") or {}
+        cand = (f" Possible candidate, not adopted: {_handle_md(c)}." if c else "")
         return [f"_Quote-first web lookup {d}: unknown"
-                f"{' (' + v['note'] + ')' if v.get('note') else ''}._", ""]
+                f"{' (' + v['note'] + ')' if v.get('note') else ''}.{cand}_", ""]
     md = [f"## Identity — per web lookup {d} ({v['tier']})", "",
           f"- Handle: {_handle_md(v)}"
           + (f" · display name: {_cell(v['display_name'])}" if v.get("display_name") else "")
           + (f" · real name: {_cell(v['real_name'])}" if v.get("real_name") else ""),
           f"- Affiliation: {_cell(v.get('affiliation')) or '-'} ({v.get('affiliation_type') or 'other'})"]
     if v.get("quote_url"):
-        md.append(f"- Quoted post: [{_url_label(v['quote_url'])}]({_md_url(v['quote_url'])})")
+        lbl = "Quoted post" if v.get("tier") == "confirmed" else "Quote seen at (not their own post)"
+        md.append(f"- {lbl}: [{_url_label(v['quote_url'])}]({_md_url(v['quote_url'])})")
     md.append(f"- Evidence: {voice_evidence_md(v) or '-'}")
     md.append(f"- Tier: {TIER_TEXT[v['tier']]}"
               + (" (x.com login wall: search snippets only)" if v.get("login_wall_only") else ""))
@@ -1272,7 +1323,8 @@ def render_person(p: PersonEntry, rec: Optional[Dict[str, Any]], pdir: Path,
             md += [f"_Possible match, {web_label(wn)} — low confidence, not adopted: "
                    f"{wn.get('description')}_", ""]
         else:
-            md += [f"_Web lookup {wn.get('looked_up_at')}: not found"
+            earlier = "Earlier name-only web lookup" if v else "Web lookup"
+            md += [f"_{earlier} {wn.get('looked_up_at')}: not found"
                    f"{' (' + wn['note'] + ')' if wn.get('note') else ''}._", ""]
     if v:
         md += voice_section(v)
@@ -1463,7 +1515,7 @@ QUEUE_MAX = 15
 
 QUOTED_ROLE = re.compile(r"quot|cited|guest|speaker|interview|author|post", re.I)
 HOST_ROLE = re.compile(r"\bhost\b|co-?host", re.I)
-VOICES_MAX = 40
+VOICES_MAX = 100
 
 
 def _cite_link(e: dg.Episode, cite: str) -> Optional[str]:
@@ -1504,18 +1556,18 @@ def ai_voices(entries: Sequence[PersonEntry], recs: Dict[str, Optional[Dict]],
         rec = recs.get(p.slug) or {}
         v = rec.get("voice") or {}
         desc, kind = _description(rec)
-        stated = " ".join(a.row.background or "" for a in p.apps)
         if v.get("tier") in ("confirmed", "probable"):
             tier, aff, atype = v["tier"], v.get("affiliation") or "", v.get("affiliation_type") or "other"
             real = v.get("real_name") or v.get("display_name") or ""
             ai = True                                       # two-signal acceptance includes an AI bio
         elif kind in ("model", "web"):
             tier = "known (model knowledge)" if kind == "model" else "known (web lookup)"
-            aff = re.split(r"(?<=[.!?])\s", desc, maxsplit=1)[0]
+            aff = first_sentence(desc)
             aff = aff if len(aff) <= 110 else aff[:107].rstrip() + "…"
-            atype = classify_affiliation(desc + " " + stated)
+            # the bio decides (not what the notes say they talked about)
+            atype = classify_affiliation(desc)
             real = rec.get("canonical_name") or ((_web_found(rec) or {}).get("name") or "")
-            ai = bool(AI_RE.search(desc + " " + stated))
+            ai = bool(AI_RE.search(desc))
         else:
             unidentified.append(p.name)
             continue
@@ -1719,6 +1771,9 @@ def run(scope: Scope, complete: Optional[CompleteFn], *, max_calls: Optional[int
     as_of = as_of or dt.date.today()
     state_path = scope.roots[0] / "people" / STATE_FILE
     state = _load_state(state_path)
+    for prec in state["people"].values():           # rules added after a lookup was cached
+        if prec.get("voice"):
+            prec["voice"] = enforce_voice_rules(prec["voice"])
     entries, skipped = collect_people(scope)
     refs = find_role_refs(scope.episodes)
     progress(f"{len(scope.episodes)} episode(s), {len(scope.digests)} digest(s): "

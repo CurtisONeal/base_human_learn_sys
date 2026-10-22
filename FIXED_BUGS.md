@@ -13,6 +13,37 @@ Newest first. Format: symptom → cause → fix → how we know.
 
 ---
 
+### Role lookup answered the sentence, not the date (WP-P4)
+- **Symptom:** WP-P3's web lookup "confirmed" Sam Altman as OpenAI's CEO on
+  2026-10-16 from two November 2023 articles (aljazeera.com, wfsb.com) and
+  cleared "verify". Those sources identify the person in the notes sentence
+  (the late-2023 ousting), not who held the role on the episode date.
+- **Cause:** the prompt sent the sentence alongside the question, and the code
+  accepted any sourced answer — the sources carried no dates.
+- **Fix:** the role prompt asks only "Who held <role> at <org> on <date>?" (the
+  sentence is labelled context only); every source carries its date; the code
+  accepts "confirmed" only with a source dated ≤90 days before the episode (or
+  a dated change, or a live official leadership page for a recent episode),
+  else "last confirmed <date>" and verify stays; a change check between the
+  last confirmation and the episode date wins. Old undated WP-P3 role answers
+  no longer clear verify and are re-checked once.
+- **How we know:** `test_role_dated_evidence_acceptance_and_rejection`,
+  `test_change_check_overrides_last_confirmed`,
+  `test_wp_p3_undated_role_lookup_is_rechecked`; real re-run: Sam Altman,
+  confirmed by cnbc.com 2026-09-14 (from search summaries; the pages gave 403).
+
+### "Confirmed" voice identity from a quote seen in someone else's post (WP-P4)
+- **Symptom:** real run: George Cal → @georgevibing and Simon Smith →
+  @_simonsmith came back "confirmed", with the quote seen only in a snippet of
+  @elonmusk's reply and in a digg.com write-up.
+- **Cause:** the first tier rule required the quote URL among the evidence, not
+  on the person's own post.
+- **Fix:** `enforce_voice_rules` — confirmed needs the quote on their own
+  x.com / twitter.com post or profile; otherwise probable, with a note. Also
+  applied to cached results on load (0 web calls).
+- **How we know:** `test_confirmed_needs_the_quote_on_their_own_post` (including
+  the cache re-evaluation and a byte-identical rerun).
+
 ### Eval P6 failed notes for listing a mishearing on purpose (WP-P2)
 - **Symptom:** Stage 3 AIDB run: SX9LQD3yINg failed P6 ("1 residual
   mishearing") on "Cloud Code → Claude Code".

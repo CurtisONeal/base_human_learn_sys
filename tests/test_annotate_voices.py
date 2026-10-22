@@ -355,3 +355,48 @@ def test_private_and_unnamed_never_looked_up(tmp_path):
     s = (vault / "sources" / "_index.md").read_text()
     assert "Jo Listener" not in s
     assert res.web["voices"]["eligible"] == 1
+
+
+def test_confirmed_needs_the_quote_on_their_own_post(tmp_path):
+    """Found by the real run: a quote seen in someone else's reply, or in an
+    article about the post, is not "quote found on their post" -> probable."""
+    other = "https://x.com/elonmusk/status/2110225499205390759"
+    v = _v(voice_reply("confirmed", "georgevibing", [
+        (other, "snippet", True, ["topic", "quote"]),
+        ("https://x.com/georgevibing/status/1", "snippet", True, ["bio"])], quote_url=other))
+    assert v["tier"] == "probable" and "quote seen on x.com, not on their own post" in v["note"]
+    art = "https://digg.com/ai/n5z397lz"
+    v2 = _v(voice_reply("confirmed", "_simonsmith", [(art, "article", False, ["topic", "quote"]),
+                                                    ("https://substack.com/@s", "profile", False, ["bio"])],
+                        quote_url=art))
+    assert v2["tier"] == "probable" and "quote seen on digg.com" in v2["note"]
+    assert ap.own_post("https://twitter.com/Theo/status/9", "theo")
+    assert not ap.own_post("https://x.com/theodore/status/9", "theo")
+    # a cached result from before the rule is re-evaluated on load (no web call)
+    vault = tmp_path / "vault" / "subj"
+    rows = [("George Cal", "quoted", "game engine developer", "Says Opus is \"scary good at game dev\".",
+             "[0:16:36]")]
+    paths = [_ep(vault, "ep1", "AAAAAAAAAAA", "2026-10-14", rows)]
+    ap.run(_scope(tmp_path, paths), FakeLLM(unknown={"George Cal"}), web=False, as_of=AS_OF)
+    sp = tmp_path / "collection" / "people" / ap.STATE_FILE
+    state = json.loads(sp.read_text())
+    state["people"]["george_cal"]["voice"] = dict(v, tier="confirmed", note="", quote_url=other)
+    sp.write_text(json.dumps(state))
+    web = FakeWeb()
+    ap.run(_scope(tmp_path, paths), FakeLLM(), web_complete=web, as_of=AS_OF)
+    assert web.calls == []
+    assert json.loads(sp.read_text())["people"]["george_cal"]["voice"]["tier"] == "probable"
+    assert "## Identity — per web lookup 2026-10-21 (probable)" in (vault / "people" / "george_cal.md").read_text()
+    before = _snapshot(tmp_path)
+    ap.run(_scope(tmp_path, paths), FakeLLM(), web_complete=FakeWeb(), as_of=AS_OF)
+    assert _snapshot(tmp_path) == before
+
+
+def test_unknown_keeps_a_candidate_not_adopted():
+    v = _v(voice_reply("probable", "maxblade", [("https://x.com/maxblade/status/1", "snippet", True,
+                                                 ["topic"])]))
+    assert v["tier"] == "unknown" and v["handle"] == ""
+    assert v["candidate"] == {"handle": "maxblade", "profile_url": "https://x.com/maxblade",
+                              "claimed_tier": "probable", "display_name": "Maxblade"}
+    assert "Possible candidate, not adopted: [@maxblade](https://x.com/maxblade)." in "".join(
+        ap.voice_section(v))

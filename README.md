@@ -948,7 +948,28 @@ subscription `claude -p` call (WebSearch + WebFetch only) per 10 targets,
 "per web lookup <date> (sources: …)"; "verify" clears only on confirmation;
 contradictions are shown next to the model's answer. Cached in
 `people/.annotate_state.json` (rerun: 0 calls). `--no-web`,
-`--max-web-calls N` (default 5).
+`--max-web-calls N` (default 5, all lookup kinds together).
+
+WP-P4 refinements:
+- **Quoted people with no model knowledge** (bare handles, first names) are
+  looked up by the QUOTE, not the name (`prompts/annotate/voice_lookup.md`):
+  `site:x.com "<exact quote>"` in the 7 days before the episode, then the
+  claim words, then `x.com/<handle>`. The code decides the tier from the
+  evidence — **confirmed** (quote on their own post/profile + AI-related bio),
+  **probable** (handle + AI bio + a post on the quoted topic; x.com
+  login-wall snippets never go above this), **unknown** (a candidate, if
+  any, is shown "not adopted").
+- **AI voices** in `sources/_index.md`: quoted people with an AI-related bio,
+  ranked by signal score = times quoted × (1 + ln episodes) ×
+  0.5^(days since last quoted / 30) × affiliation weight (lab 1.5,
+  researcher 1.4, founder 1.3, investor 1.2, journalist 1.1, other 1.0) —
+  the listen/follow queue.
+- **Roles** are asked only "Who held <role> at <org> on <date>?"
+  (`prompts/annotate/role_on_date.md`; the notes sentence is context only).
+  Every source carries its date; "confirmed" needs a source dated ≤90 days
+  before the episode or a live official leadership page, else "last
+  confirmed <date>" and verify stays. A change of holder found between the
+  last confirmation and the episode date wins (both names recorded).
 
 ## Development
 If you want to modify the code or run tests locally, you'll need a local Python environment.
