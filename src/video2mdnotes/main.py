@@ -1738,7 +1738,7 @@ def annotate_people_cmd(
     if w:
         console.print(f"[green]web lookup[/green]: calls {w['calls']} ({', '.join(w['models']) or 'none'})"
                       f" · targets {w['targets']} · sent {w['sent']} · found {w['found']} · not found "
-                      f"{w['not_found']} · totals people {w['people']} · roles {w['roles']}"
+                      f"{w['not_found']} · totals people {w['people']} · voices {w.get('voices')} · roles {w['roles']}"
                       + (f" · STOPPED: {w['stopped']}" if w.get("stopped") else ""),
                       highlight=False)
     for r in res.roots:
