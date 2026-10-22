@@ -240,6 +240,8 @@ class PersonEntry:
     role: str
     apps: List[Appearance]
     keys: set
+    members: List["PersonEntry"] = field(default_factory=list)   # WP-P5: merged duplicates
+    merge_basis: Dict[str, str] = field(default_factory=dict)    # dropped slug -> why
 
     def episode_dates(self) -> List[dt.date]:
         return sorted({a.episode.published for a in self.apps if a.episode})
@@ -763,6 +765,8 @@ def select_web_targets(entries: Sequence[PersonEntry], refs: Sequence[RoleRef],
         rec = _state_person(state, p)
         if rec is None or id(rec) in seen or not _needs_voice(rec):
             continue
+        if p.members and _description(merged_view(state, p))[1] != "none":
+            continue                       # merged with an identified duplicate (WP-P5)
         seen.add(id(rec))
         out.append(WebTarget("voice", rec, voice_payload(p, show)))
     return out
@@ -829,9 +833,34 @@ _AFF_RX = [
                               r"podcast|host|analyst|commentator|YouTuber|creator)\b", re.I)),
 ]
 AI_RE = re.compile(r"\bAI\b|artificial intelligence|machine learning|\bML\b|\bLLMs?\b|language model|"
-                   r"OpenAI|Anthropic|DeepMind|Gemini|Claude|ChatGPT|GPT|neural|deep learning|"
-                   r"robotics|\bagents?\b|Nvidia|chips?\b|data cent(?:er|re)|compute|Hugging ?Face|"
-                   r"Mistral|xAI|Cognition|Perplexity|prompt|vibe.?cod", re.I)
+                   r"OpenAI|Anthropic|DeepMind|Gemini|Claude|ChatGPT|GPT|\bneural\b|deep learning|"
+                   r"robotics|\b(?:AI|coding|software|autonomous) agents?\b|Nvidia|\bchips?\b|"
+                   r"data cent(?:er|re)|\bcompute\b|Hugging ?Face|"
+                   r"Mistral|xAI|Cognition|Perplexity|\bprompts?\b|vibe.?cod", re.I)
+# WP-P5: an AI term inside a clause about an EVENT the person is party to (a
+# judge's ruling in an AI case, an arrest, a lawsuit) does not make the bio
+# AI-related; only what the person is / does counts.
+EVENT_RE = re.compile(
+    r"\b(?:arrest\w*|charged|charges|accused|indict\w*|sentenc\w*|convicted|sued|sues|suing|lawsuit\w*|"
+    r"ruled|ruling|presid(?:ed|es|ing) over|denied|granted|bail|hearing|trial|testif\w*|"
+    r"prosecut(?:ed|ing|ion)|pleaded|bankruptcy|fired)\b", re.I)
+_CLAUSE_START = re.compile(r",\s|;\s|\s(?:who|which|whom|after|when|where|while)\s", re.I)
+
+
+def ai_related(desc: str) -> bool:
+    """The bio says the person's own role/work is AI-related. Per sentence:
+    a clause that reports an event (EVENT_RE) is cut off from where it
+    starts, so "a US Magistrate Judge … On Oct 19 he denied bail to the
+    former OpenAI engineer" is not AI-related, while "a former OpenAI
+    engineer who was arrested" still is (the identity clause comes first)."""
+    for s in re.split(r"(?<=[.!?])\s+", " ".join(str(desc or "").split())):
+        m = EVENT_RE.search(s)
+        if m:
+            starts = [c.start() for c in _CLAUSE_START.finditer(s, 0, m.start())]
+            s = s[:starts[-1]] if starts else s[:m.start()]
+        if AI_RE.search(s):
+            return True
+    return False
 
 
 _ABBREV_END = re.compile(r"(?:\b(?:[A-Z]\.){1,3}|\b(?:Mr|Ms|Mrs|Dr|Jr|Sr|St|Inc|Co|Corp|Ltd|vs|No)\.)$")
@@ -1178,6 +1207,308 @@ def apply_web_role(rec: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
+# Duplicate people after lookup (WP-P5) — deterministic, no model call
+# --------------------------------------------------------------------------- #
+#
+# merge_people (core/people.py) joins rows by spelling (normalised names, ASR
+# sounds-alike). A lookup can show that two DIFFERENT spellings are one person:
+# "Kyo" (an ASR garble) has the confirmed voice handle @theo, and "Theo" is in
+# the index from model knowledge; "Demis Asabis" has the model-knowledge
+# spelling "Demis Hassabis", which another episode spelled right. Rules:
+#
+#   identity names  canonical_name (model) · web name (found, high/medium) ·
+#                   confirmed voice real name / display name (≥2 tokens)
+#   handles         confirmed voice handle; a one-token display name ("Theo - t3.gg")
+#   merge when      an identity name of one entry = a name / identity name of the other
+#                   (≥2 tokens), or a handle = the other's full name run together
+#                   ("theobrowne"), or a handle / one-token display name = the other's
+#                   one-token name AND the two records share a distinctive token
+#                   ("t3.gg", "Twitch", a product name) — a bare first name alone
+#                   never merges
+#   never           private records; probable / unknown voices; low-confidence web matches
+#
+# Survivor: the entry whose own name IS the identity (Theo, not Kyo), then the
+# one with a description, then more appearances. Records stay in the state as
+# they are (caches intact); the merge is re-derived every run and logged in
+# state["merges"].
+
+_GENERIC_TOKENS = set("""developer developers founder cofounder co-founder ceo cto engineer engineers creator
+company companies startup startups tech technology works work writer writes researcher research host
+hosts account posts post about known former previously currently also american british based
+youtuber streamer investor partner president director head chief officer team member staff executive
+the and his her their who which with from into for x twitter linkedin profile bio ai ml llm models model
+""".split())
+_TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9.+_-]*[A-Za-z0-9]")
+
+
+def _compact(k: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", (k or "").lower())
+
+
+def _identity(p: PersonEntry, rec: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    full: set = set()
+    handles: set = set()
+    texts: List[str] = []
+    if rec and not rec.get("private"):
+        if rec.get("canonical_name"):
+            full.add(people_mod.name_key(rec["canonical_name"]))
+        w = _web_found(rec)
+        if w and w.get("name"):
+            full.add(people_mod.name_key(w["name"]))
+            texts.append(w.get("description") or "")
+        v = rec.get("voice") or {}
+        if v.get("tier") == "confirmed":
+            if v.get("handle"):
+                handles.add(v["handle"].lower())
+            names = [v.get("real_name") or ""] + re.split(r"\s+[-–—|·]\s+|\s*\(", v.get("display_name") or "")
+            for n in names:
+                if not re.fullmatch(r"[A-Za-z][A-Za-z .'’-]*", (n or "").strip()):
+                    continue                     # "t3.gg", emoji, "@x" are not names
+                k = people_mod.name_key(n)
+                if len(k.split()) >= 2:
+                    full.add(k)
+                elif k:
+                    handles.add(_compact(k))
+            texts += [v.get("affiliation") or "", v.get("description") or "", v.get("display_name") or ""]
+        if rec.get("known"):
+            texts.append(rec.get("description") or "")
+    full = {k for k in full if len(k.split()) >= 2}
+    own = {k for k in p.keys if k}
+    name_toks = {t for k in own | full for t in k.split()} | handles
+    toks = set()
+    for t in texts:
+        for m in _TOKEN_RE.finditer(t):
+            w = m.group(0)
+            lw = w.lower()
+            marked = bool(re.search(r"[\d.]", w))            # t3.gg, GPT-5, a domain
+            initial = re.search(r"(?:^|[.!?:\"“(]\s*)$", t[:m.start()]) is not None
+            if (lw in _STOP or lw in _GENERIC_TOKENS or lw in name_toks or len(lw) < 3
+                    or not (marked or (w[:1].isupper() and not initial))):
+                continue
+            toks.add(lw)
+    return {"full": full, "handles": handles, "own": own, "tokens": toks}
+
+
+def _merge_basis(a: Dict[str, Any], b: Dict[str, Any]) -> str:
+    """Why a and b are the same person ('' = not shown to be)."""
+    own_full_b = {k for k in b["own"] if len(k.split()) >= 2}
+    hit = (a["full"] & (own_full_b | b["full"])) or (b["full"] & {k for k in a["own"] if len(k.split()) >= 2})
+    if hit:
+        return f"identity name \"{sorted(hit)[0]}\" matches"
+    for x, y in ((a, b), (b, a)):
+        for h in sorted(x["handles"]):
+            if any(_compact(k) == h for k in (y["own"] | y["full"]) if len(k.split()) >= 2) \
+                    or h in y["handles"]:
+                return f"handle @{h} matches the full name"
+            if any(_compact(k) == h for k in y["own"] if len(k.split()) == 1):
+                shared = sorted(x["tokens"] & y["tokens"])
+                if shared:
+                    return f"handle / display name \"{h}\" matches the name, corroborated by \"{shared[0]}\""
+    return ""
+
+
+def _member_recs(state: Dict[str, Any], p: PersonEntry) -> List[Tuple[PersonEntry, Dict[str, Any]]]:
+    out: List[Tuple[PersonEntry, Dict[str, Any]]] = []
+    seen = set()
+    for m in (p.members or [p]):
+        rec = _state_person(state, m)
+        if rec is not None and id(rec) not in seen:
+            seen.add(id(rec))
+            out.append((m, rec))
+    return out
+
+
+def _survivor_score(p: PersonEntry, rec: Optional[Dict[str, Any]], ident: set, i: int):
+    own = people_mod.name_key(p.name)
+    is_ident = own in ident or _compact(own) in ident
+    _, kind = _description(rec)
+    return (is_ident, kind in ("model", "web", "voice"), len({a.episode.key for a in p.apps if a.episode}),
+            len(own.split()), -i)
+
+
+def merge_duplicates(entries: Sequence[PersonEntry], state: Dict[str, Any],
+                     as_of: dt.date) -> Tuple[List[PersonEntry], List[Dict[str, Any]]]:
+    """Union of the entries the identity rules show to be one person.
+    Returns (entries, merges this run as {into, from, names, basis})."""
+    ents = list(entries)
+    recs = [merged_view(state, p) for p in ents]
+
+    def ident_of(p: PersonEntry) -> Optional[Dict[str, Any]]:
+        mr = _member_recs(state, p)
+        if any(r.get("private") for _, r in mr):
+            return None
+        out = _identity(p, None)
+        for _, r in mr:
+            x = _identity(p, r)
+            for k in ("full", "handles", "tokens"):
+                out[k] |= x[k]
+        return out
+    ids = [ident_of(p) for p in ents]
+    parent = list(range(len(ents)))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+    basis: Dict[Tuple[int, int], str] = {}
+    for i in range(len(ents)):
+        for j in range(i + 1, len(ents)):
+            if ids[i] is None or ids[j] is None:
+                continue
+            if not (ids[i]["full"] or ids[i]["handles"] or ids[j]["full"] or ids[j]["handles"]):
+                continue
+            why = _merge_basis(ids[i], ids[j])
+            if why and find(i) != find(j):
+                parent[find(j)] = find(i)
+                basis[(i, j)] = why
+    groups: Dict[int, List[int]] = {}
+    for i in range(len(ents)):
+        groups.setdefault(find(i), []).append(i)
+    out: List[PersonEntry] = []
+    merges: List[Dict[str, Any]] = []
+    log = state.setdefault("merges", {})
+    for root_i in sorted(groups, key=lambda r: min(groups[r])):
+        idx = groups[root_i]
+        if len(idx) == 1:
+            p = ents[idx[0]]
+            out.append(p)
+            for m in p.members:                      # merged by an earlier pass of this run
+                if m.slug != p.slug and m.slug in log:
+                    merges.append({"into": p.slug, "from": m.slug, "names": [m.name, p.name],
+                                   "basis": log[m.slug]["basis"]})
+            continue
+        ident = set()
+        for i in idx:
+            ident |= ids[i]["full"] | ids[i]["handles"]
+        surv_i = max(idx, key=lambda i: _survivor_score(ents[i], recs[i], ident, i))
+        s = ents[surv_i]
+        members: List[PersonEntry] = []
+        for i in [surv_i] + [i for i in idx if i != surv_i]:
+            members += ents[i].members or [ents[i]]
+        names = [m.name for m in members]
+        aliases = list(dict.fromkeys(x for m in members for x in [m.name, *m.aliases]
+                                     if x and people_mod.name_key(x) != people_mod.name_key(s.name)))
+        apps = [a for m in members for a in m.apps]
+        role = people_mod._merge_role([a.row.role for a in apps if a.episode]) or s.role
+        keys = set().union(*(m.keys for m in members))
+        mb = dict(s.merge_basis)
+        for i in idx:
+            if i == surv_i:
+                continue
+            why = next((basis[k] for k in basis if i in k), "") or "same group"
+            for m in (ents[i].members or [ents[i]]):
+                mb.setdefault(m.slug, why)
+        merged = PersonEntry(s.slug, s.name, aliases, role, apps, keys, members=members, merge_basis=mb)
+        out.append(merged)
+        for m in members:
+            if m.slug == s.slug:
+                continue
+            rec_log = log.get(m.slug)
+            if not rec_log or rec_log.get("into") != s.slug:
+                log[m.slug] = {"into": s.slug, "from_name": m.name, "into_name": s.name,
+                               "basis": mb.get(m.slug, ""), "merged_at": as_of.isoformat()}
+            merges.append({"into": s.slug, "from": m.slug, "names": [m.name, s.name],
+                           "basis": log[m.slug]["basis"]})
+    out.sort(key=lambda e: (-len({a.episode.key for a in e.apps if a.episode}), e.name.lower()))
+    return out, merges
+
+
+def _bio_rank(kind: str) -> int:
+    return 1 if kind in ("model", "web") else 0
+
+
+def merged_view(state: Dict[str, Any], p: PersonEntry) -> Optional[Dict[str, Any]]:
+    """The record a merged entry is rendered from: the survivor's record
+    with the best identity of the group (confirmed voice, adopted web
+    lookup, canonical spelling) and the RICHER description — a bio (model
+    knowledge / web lookup) before a quote-lookup profile summary, then the
+    longer. Every other description stays, labelled with where it came from."""
+    if not p.members:
+        return _state_person(state, p)
+    mrecs = _member_recs(state, p)
+    if not mrecs:
+        return None
+    base = next((r for m, r in mrecs if m.slug == p.slug), mrecs[0][1])
+    view = dict(base)
+    sources: Dict[str, str] = {}
+    for key, ok in (("voice", lambda r: (r.get("voice") or {}).get("tier") in ("confirmed", "probable")),
+                    ("web", lambda r: _web_found(r) is not None)):
+        if not ok(view):
+            for m, r in mrecs:
+                if r is not base and ok(r):
+                    view[key] = r[key]
+                    sources[key] = m.name
+                    break
+    if not view.get("canonical_name"):
+        for m, r in mrecs:
+            if r.get("canonical_name"):
+                view["canonical_name"] = r["canonical_name"]
+                break
+    cands = []
+    for k, (m, r) in enumerate(mrecs):
+        d, kind = _description(r)
+        if kind in ("model", "web", "voice"):
+            cands.append((_bio_rank(kind), len(d.split()), -k, m, r, d, kind))
+    if cands:
+        best = max(cands, key=lambda c: c[:3])
+        _, _, _, m, r, d, kind = best
+        if kind == "voice":
+            view["voice"] = r["voice"]
+        elif kind == "web":
+            view["web"] = r["web"]
+        else:
+            view.update(known=True, description=r["description"], model=r.get("model", ""))
+        view["merged_desc"] = {"text": d, "kind": kind, "from": m.name}
+        view["merged_others"] = [{"from": c[3].name, "kind": c[6], "text": c[5],
+                                  "label": _desc_label(c[6], c[4])}
+                                 for c in cands if c is not best and c[5] != d]
+    view["merged_from"] = [{"name": m.name, "slug": m.slug, "basis": p.merge_basis.get(m.slug, "")}
+                           for m in p.members if m.slug != p.slug]
+    view["identity_from"] = sources
+    return view
+
+
+def _desc_label(kind: str, rec: Dict[str, Any]) -> str:
+    if kind == "model":
+        return f"{MODEL_KNOWLEDGE}, {rec.get('model') or 'model'}"
+    if kind == "web":
+        return web_label(rec.get("web") or {})
+    v = rec.get("voice") or {}
+    return f"per web lookup {v.get('looked_up_at')} ({v.get('tier')} identity)"
+
+
+def render_redirect(m: Dict[str, Any], into: PersonEntry) -> str:
+    """The note left at a merged-away slug: a pointer, so old links work."""
+    return "\n".join([
+        "---", f"name: {_q(m['from_name'])}", f"merged_into: {_q(into.slug)}",
+        f"aliases: [{_q(m['from_name'])}]", f"generated_by: {GENERATOR}", "tags: [person, redirect]",
+        "---", f"# {m['from_name']}", "",
+        f"Merged into [{_cell(into.name)}]({into.slug}.md) on {m['merged_at']} — the same person "
+        f"({m['basis'] or 'identity match'}). Appearances, aliases and descriptions are there.", ""])
+
+
+_PEOPLE_LINK = r"(\]\((?:[^()\s]*/)?people/){slug}\.md\)"
+
+
+def redirect_links(paths: Iterable[Path], moves: Dict[str, str]) -> int:
+    """Links to a merged-away person note (people/<old>.md) in episode notes
+    and digests point to the surviving note."""
+    n = 0
+    for path in paths:
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8")
+        new = text
+        for old, into in moves.items():
+            new = re.sub(_PEOPLE_LINK.format(slug=re.escape(old)), rf"\g<1>{into}.md)", new)
+        if new != text:
+            _write_if_changed(path, new)
+            n += 1
+    return n
+
+
+# --------------------------------------------------------------------------- #
 # Rendering
 # --------------------------------------------------------------------------- #
 
@@ -1207,6 +1538,9 @@ def _description(rec: Optional[Dict[str, Any]]) -> Tuple[str, str]:
     used only where the lookup was triggered (unknown, or post-cutoff)."""
     if not rec:
         return PENDING, "pending"
+    md = rec.get("merged_desc")
+    if md:
+        return md["text"], md["kind"]
     v = rec.get("voice") or {}
     if v.get("tier") == "confirmed" and v.get("description"):
         return v["description"], "voice"
@@ -1273,6 +1607,24 @@ def voice_section(v: Dict[str, Any]) -> List[str]:
     return md
 
 
+def merged_section(rec: Dict[str, Any]) -> List[str]:
+    """WP-P5: which records were merged here, why, and the descriptions not
+    chosen — each with its own provenance."""
+    mf = rec.get("merged_from") or []
+    if not mf:
+        return []
+    md = ["## Merged records", ""]
+    for m in mf:
+        md.append(f"- \"{_cell(m['name'])}\" (was [{m['slug']}]({m['slug']}.md)) — "
+                  f"{m.get('basis') or 'identity match'}; merged deterministically after the lookup.")
+    d = rec.get("merged_desc") or {}
+    if d:
+        md.append(f"- Description above: from \"{_cell(d['from'])}\".")
+    for o in rec.get("merged_others") or []:
+        md.append(f"- Also, {o['label']}, from \"{_cell(o['from'])}\": {o['text']}")
+    return md + [""]
+
+
 def render_person(p: PersonEntry, rec: Optional[Dict[str, Any]], pdir: Path,
                   role_apps: Sequence[Tuple[RoleRef, Dict]]) -> str:
     desc, kind = _description(rec)
@@ -1326,7 +1678,11 @@ def render_person(p: PersonEntry, rec: Optional[Dict[str, Any]], pdir: Path,
             earlier = "Earlier name-only web lookup" if v else "Web lookup"
             md += [f"_{earlier} {wn.get('looked_up_at')}: not found"
                    f"{' (' + wn['note'] + ')' if wn.get('note') else ''}._", ""]
+    md += merged_section(rec or {})
     if v:
+        src = ((rec or {}).get("identity_from") or {}).get("voice")
+        if src:
+            md += [f"_The identity below was found for the merged record \"{_cell(src)}\"._", ""]
         md += voice_section(v)
     md += ["## As stated in sources", ""]
     stated = []
@@ -1433,7 +1789,8 @@ _KIND_TAG = {"model": " _(model knowledge)_", "web": " _(web lookup)_",
 def render_people_index(entries: Sequence[PersonEntry], recs: Dict[str, Optional[Dict]],
                         resolved: Sequence[Tuple[RoleRef, Dict]], skipped_private: int,
                         role_apps: Dict[str, List[Tuple[RoleRef, Dict]]],
-                        show: str, n_eps: int, n_digests: int, cutoff: Optional[str]) -> str:
+                        show: str, n_eps: int, n_digests: int, cutoff: Optional[str],
+                        merges: Sequence[Dict[str, Any]] = ()) -> str:
     md = ["---", f"title: {_q(f'{show} — people')}", f"people: {len(entries)}",
           f"episodes: {n_eps}", f"digests: {n_digests}",
           f"model_knowledge_cutoff: {_q(cutoff) if cutoff else 'null'}",
@@ -1470,6 +1827,15 @@ def render_people_index(entries: Sequence[PersonEntry], recs: Dict[str, Optional
         for r, res in resolved:
             link = f"{res['slug']}.md" if res.get("slug") else None
             md.append(f"- \"{r.phrase}\" ({r.date.isoformat()}) {_resolution_text(r, res, link)}")
+    if merges:
+        md += ["", "## Merged duplicates", "",
+               "_Two index entries shown by a lookup (or the model's spelling) to be one person, merged "
+               "deterministically: aliases, appearances and stated facts unioned, the richer description "
+               "kept, the other descriptions kept with their provenance. The old note is a redirect._", ""]
+        for m in merges:
+            md.append(f"- \"{_cell(m['from_name'])}\" ([{m['from']}]({m['from']}.md)) → "
+                      f"[{_cell(m['into_name'])}]({m['into']}.md) — {m.get('basis') or 'identity match'} "
+                      f"(merged {m['merged_at']})")
     return "\n".join(md) + "\n"
 
 
@@ -1558,7 +1924,7 @@ def ai_voices(entries: Sequence[PersonEntry], recs: Dict[str, Optional[Dict]],
         desc, kind = _description(rec)
         if v.get("tier") in ("confirmed", "probable"):
             tier, aff, atype = v["tier"], v.get("affiliation") or "", v.get("affiliation_type") or "other"
-            real = v.get("real_name") or v.get("display_name") or ""
+            real = rec.get("canonical_name") or v.get("real_name") or v.get("display_name") or ""
             ai = True                                       # two-signal acceptance includes an AI bio
         elif kind in ("model", "web"):
             tier = "known (model knowledge)" if kind == "model" else "known (web lookup)"
@@ -1567,7 +1933,7 @@ def ai_voices(entries: Sequence[PersonEntry], recs: Dict[str, Optional[Dict]],
             # the bio decides (not what the notes say they talked about)
             atype = classify_affiliation(desc)
             real = rec.get("canonical_name") or ((_web_found(rec) or {}).get("name") or "")
-            ai = bool(AI_RE.search(desc))
+            ai = ai_related(desc)
         else:
             unidentified.append(p.name)
             continue
@@ -1761,6 +2127,8 @@ class AnnotateResult:
     stopped: str = ""
     link_problems: List[str] = field(default_factory=list)
     web: Dict[str, Any] = field(default_factory=dict)
+    merges: List[Dict[str, Any]] = field(default_factory=list)
+    links_redirected: int = 0
 
 
 def run(scope: Scope, complete: Optional[CompleteFn], *, max_calls: Optional[int] = None,
@@ -1778,6 +2146,9 @@ def run(scope: Scope, complete: Optional[CompleteFn], *, max_calls: Optional[int
     refs = find_role_refs(scope.episodes)
     progress(f"{len(scope.episodes)} episode(s), {len(scope.digests)} digest(s): "
              f"{len(entries)} unique people, {len(refs)} role reference(s)")
+    # duplicates the cached lookups already show (a new spelling of a known
+    # identity is not described again — WP-P5)
+    entries, _ = merge_duplicates(entries, state, as_of)
 
     # -- what needs the model
     people_todo: List[Tuple[PersonEntry, str]] = []
@@ -1835,6 +2206,12 @@ def run(scope: Scope, complete: Optional[CompleteFn], *, max_calls: Optional[int
                      f"max {max_web_calls} call(s)")
             run_web_lookups(targets, web_complete, max_web_calls, as_of, wlog)
 
+    # -- duplicates the lookups revealed (deterministic, 0 calls)
+    entries, merges = merge_duplicates(entries, state, as_of)
+    for m in merges:
+        progress(f"merged duplicate: \"{m['names'][0]}\" ({m['from']}) → \"{m['names'][1]}\" "
+                 f"({m['into']}): {m['basis']}")
+
     # -- role resolutions → person entries
     by_key: Dict[str, PersonEntry] = {}
     for p in entries:
@@ -1890,12 +2267,16 @@ def run(scope: Scope, complete: Optional[CompleteFn], *, max_calls: Optional[int
     shown: List[PersonEntry] = []
     private = skipped
     for p in all_entries:
-        rec = _state_person(state, p)
+        rec = merged_view(state, p)
         if rec and rec.get("private"):
             private += 1
             continue
         recs[p.slug] = rec
         shown.append(p)
+    shown_slugs = {p.slug for p in shown}
+    by_slug = {p.slug: p for p in shown}
+    moves = {m["from"]: m["into"] for m in merges
+             if m["from"] not in shown_slugs and m["into"] in by_slug}
 
     voices, unidentified, not_ai = ai_voices(shown, recs, as_of)
 
@@ -1911,8 +2292,14 @@ def run(scope: Scope, complete: Optional[CompleteFn], *, max_calls: Optional[int
             if _write_if_changed(pdir / f"{p.slug}.md", text):
                 written.append(pdir / f"{p.slug}.md")
             to_check.append((pdir / f"{p.slug}.md", text))
+        for old, into in sorted(moves.items()):             # merged-away notes → redirect
+            text = render_redirect(state["merges"][old], by_slug[into])
+            if _write_if_changed(pdir / f"{old}.md", text):
+                written.append(pdir / f"{old}.md")
+            to_check.append((pdir / f"{old}.md", text))
         idx = render_people_index(shown, recs, resolved, private, role_apps, scope.show,
-                                  len(scope.episodes), len(scope.digests), state.get("knowledge_cutoff"))
+                                  len(scope.episodes), len(scope.digests), state.get("knowledge_cutoff"),
+                                  merges=[state["merges"][o] | {"from": o} for o in sorted(moves)])
         for name, text in (("_index.md", idx), ("_resolutions.md", render_resolutions(resolved, pdir))):
             if _write_if_changed(pdir / name, text):
                 written.append(pdir / name)
@@ -1924,6 +2311,10 @@ def run(scope: Scope, complete: Optional[CompleteFn], *, max_calls: Optional[int
         to_check.append((sdir / "_index.md", stext))
     for path, text in to_check:
         problems += [f"{path}: {x}" for x in _check_links(text, path.parent)]
+
+    # -- links to a merged-away note (role annotations in notes, digests) → the survivor
+    redirected = redirect_links([e.notes_path for e in scope.episodes] + [d.path for d in scope.digests],
+                                moves) if moves else 0
 
     # -- annotate the notes (a link to the person note in the root that holds them)
     annotated = 0
@@ -1952,7 +2343,8 @@ def run(scope: Scope, complete: Optional[CompleteFn], *, max_calls: Optional[int
         roles=[{"reference": r.phrase, "date": r.date.isoformat(), "name": res.get("name"),
                 "confidence": res.get("confidence"), "verify": res.get("verify")} for r, res in resolved],
         skipped_private=private, sources=sitems, notes_annotated=annotated, written=written,
-        stopped=log.stopped, link_problems=problems, web=_web_summary(state, wlog))
+        stopped=log.stopped, link_problems=problems, web=_web_summary(state, wlog),
+        merges=merges, links_redirected=redirected)
 
 
 def _web_summary(state: Dict[str, Any], wlog: WebLog) -> Dict[str, Any]:
