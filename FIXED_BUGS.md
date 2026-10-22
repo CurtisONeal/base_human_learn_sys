@@ -13,6 +13,26 @@ Newest first. Format: symptom → cause → fix → how we know.
 
 ---
 
+### One person, two index entries; a judge ranked as an "AI voice" (WP-P5)
+- **Symptom:** after WP-P4, `people/_index.md` and the AI voices table had both
+  "Kyo" (ASR garble; the voice lookup confirmed @theo) and "Theo" (model
+  knowledge: Theo Browne) — two rows, quotes split. Judge Alex G. Tse ranked
+  #24 as an AI voice with weight "lab"; the description only reports that he
+  denied bail to a former OpenAI engineer.
+- **Cause:** entries were formed by spelling only (`merge_people`) and never
+  revisited after a lookup found the identity. `AI_RE` matched any AI term
+  anywhere in the bio, and three patterns had no word boundary: `compute`
+  matched "computer science", `neural` matched "Neuralink", `agents?` matched
+  "FBI agents".
+- **Fix:** `merge_duplicates` (deterministic, 0 calls) joins entries whose
+  identity names / confirmed handles match (a bare first name needs a shared
+  distinctive token); old note → redirect, links redirected, merge logged.
+  `ai_related` cuts event clauses (bail, ruling, arrest, lawsuit …) before
+  matching; the three patterns got word boundaries.
+- **How we know:** `tests/test_annotate_merge.py` (7 tests). Dry run on copies of
+  the real W42/W43 roots: 1 merge (Kyo → Theo, corroborated by "t3.gg"), 0
+  calls, 0 link problems; "not AI-related" count 31 → 32 (the judge).
+
 ### Role lookup answered the sentence, not the date (WP-P4)
 - **Symptom:** WP-P3's web lookup "confirmed" Sam Altman as OpenAI's CEO on
   2026-10-16 from two November 2023 articles (aljazeera.com, wfsb.com) and

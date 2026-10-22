@@ -259,3 +259,26 @@ Finn).
   engineer's bail hearing) still counts as AI-related.
 - Rerun: 0 model calls, 0 web calls, 299 output .md files byte-identical
   (sha256 over both roots); link check: 0 problems.
+  (Both fixed in WP-P5, below.)
+
+## Duplicate people after lookup + AI-related bios (WP-P5)
+
+Code: `merge_duplicates`, `merged_view`, `redirect_links`, `ai_related` in
+`core/annotate_people.py`. Tests: `tests/test_annotate_merge.py`. 0 model calls.
+
+| part | who |
+|---|---|
+| identity of an entry: canonical spelling (model), adopted web name (found, high/medium), confirmed voice real name / display name (≥2 tokens); confirmed handle and a one-token display name ("Theo - t3.gg" → theo) | deterministic |
+| merge when an identity name = the other's name or identity name (≥2 tokens); or a handle = the other's full name run together; or a handle / one-token display name = the other's one-word name AND both records share a distinctive token (marked: digit/dot like "t3.gg", or a capitalised non-initial word like "Twitch") | deterministic |
+| never: a private record; probable / unknown voices; low-confidence web matches; a bare first name with nothing shared | deterministic |
+| twice per run: before the model call (a new spelling of a cached identity is not described again) and after the web lookups | deterministic |
+| survivor: the entry whose own name IS the identity (Theo, not Kyo), then the one with a description, then more appearances | deterministic |
+| merged note: aliases, appearances, stated facts unioned; the richer description (a bio — model knowledge / web lookup — before a quote-lookup profile summary, then the longer) shown; every other description listed under "## Merged records" with its own label and source record; an identity found for the dropped record is shown with "found for the merged record X" | deterministic |
+| dropped note → a redirect (`merged_into:` frontmatter + link); links to `people/<dropped>.md` in episode notes and digests rewritten to the survivor; `## Merged duplicates` in `people/_index.md`; `state["merges"]` log (into, names, basis, merged_at). State records stay as they are (caches intact; the merge is re-derived each run, so a rerun is byte-identical) | deterministic |
+| AI-related bio (`ai_related`): per sentence, a clause reporting an event the person is party to (bail, ruling, arrest, charge, lawsuit, trial, testimony, bankruptcy, fired …) is cut off where it starts before matching AI terms — "a US Magistrate Judge … he denied bail to the former OpenAI engineer" is not AI-related, "a former OpenAI engineer who was arrested" still is. Word boundaries added (`compute` ≠ "computer science", `neural` ≠ "Neuralink", agents only as AI / coding / software / autonomous agents) | deterministic |
+
+Dry run on copies of the real W42/W43 roots (0 calls): 1 merge — "Kyo" →
+"Theo" (handle / display name "theo" matches the name, corroborated by
+"t3.gg"); 122 people (was 123 shown); the AI voices table has one Theo row
+(@theo, confirmed, 2 quotes) and Judge Alex G. Tse moved to "not AI-related"
+(31 → 32). No ASR-variant pair in W42/W43 had a second entry to merge with.
