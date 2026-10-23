@@ -472,3 +472,40 @@ def test_failed_auto_relist_keeps_cached_listing(col, tmp_path):
     assert len(entries) == 4 and "using the cached listing" in note
     with pytest.raises(OSError):   # an explicit --refresh still fails loudly
         cm.ensure_listing(col, f, output_root=tmp_path / "out", refresh=True, list_fn=offline)
+
+
+def test_closed_spans_only_defers_the_open_week(col):
+    """--closed-spans-only: the running week (W43 on 2026-10-21) is not built;
+    it stays pending and is built by the first run after it ends."""
+    _select(col, last_days=7, as_of=dt.date(2026, 10, 21))
+    seen = []
+
+    def digester(collection_dir, by, keys, **kw):
+        seen.append(list(keys))
+        out = Path(collection_dir) / "digests"
+        out.mkdir(parents=True, exist_ok=True)
+        for k in keys:
+            (out / f"{k}.md").write_text("d")
+
+            class R:
+                span, path, episodes, calls, cached, citations, dropped = k, out / f"{k}.md", 1, 1, 0, 3, 0
+                link_problems, partial, written = [], False, True
+            kw["on_built"](R)
+        return [], []
+
+    assert cm.span_closed("week", "2026-W42", dt.date(2026, 10, 21))
+    assert not cm.span_closed("week", "2026-W43", dt.date(2026, 10, 21))
+    assert not cm.span_closed("week", "2026-W43", dt.date(2026, 10, 25))   # Sunday: not over
+    assert cm.span_closed("month", "2026-09", dt.date(2026, 10, 1))
+    _run(col, FakeRunner(), digest_by="week", digester=digester,
+         as_of=dt.date(2026, 10, 21), closed_spans_only=True)
+    assert seen == [["2026-W42"]]
+    assert col.data["pending_digests"]["week"] == ["2026-W43"]
+    # nothing new, week still open: no digest work at all
+    _run(col, FakeRunner(), digest_by="week", digester=digester,
+         as_of=dt.date(2026, 10, 22), closed_spans_only=True)
+    assert seen == [["2026-W42"]]
+    # the Monday after: W43 is built once and leaves the pending list
+    _run(col, FakeRunner(), digest_by="week", digester=digester,
+         as_of=dt.date(2026, 10, 26), closed_spans_only=True)
+    assert seen[-1] == ["2026-W43"] and col.data["pending_digests"]["week"] == []

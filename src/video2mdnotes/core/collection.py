@@ -713,6 +713,13 @@ def span_keys(by: str, dates: Iterable[str]) -> List[str]:
     return sorted({span_key(by, dt.date.fromisoformat(d)) for d in dates if d})
 
 
+def span_closed(by: str, key: str, as_of: dt.date) -> bool:
+    """True once the whole week/month lies before `as_of`."""
+    from video2mdnotes.core.digest import month_bounds, week_bounds
+    _, end = week_bounds(key) if by == "week" else month_bounds(key)
+    return end < as_of
+
+
 def default_digester(collection_dir: Path, by: str, keys: Sequence[str], *,
                      max_calls: Optional[int] = None, as_of: Optional[dt.date] = None,
                      complete=None, on_built: Callable[[Any], None] = lambda r: None,
@@ -833,7 +840,8 @@ def run_collection(col: Collection, limits: Limits, *,
                    sleep: Callable[[float], None] = time.sleep,
                    emit: Callable[[str], None] = print,
                    say: Callable[[str], None] = lambda m: None,
-                   as_of: Optional[dt.date] = None) -> RunSummary:
+                   as_of: Optional[dt.date] = None,
+                   closed_spans_only: bool = False) -> RunSummary:
     """Process the queue (see module doc). Never raises for one item's
     failure; returns a RunSummary and leaves the manifest consistent."""
     summary = RunSummary(started=_iso(now()))
@@ -1010,7 +1018,8 @@ def run_collection(col: Collection, limits: Limits, *,
                 and not summary.stop_reason.startswith("subscription exhausted"):
             _run_digests(col, digest_by, newly_done, summary, limits, package_subject,
                          vault_subject_dir, digester, emit, say, as_of, policy, now, sleep,
-                         exhaustion_wait_s, exhaustion_max_wait_s)
+                         exhaustion_wait_s, exhaustion_max_wait_s,
+                         closed_only=closed_spans_only)
         elif digest_by:
             keys = span_keys(digest_by, [i.get("published") for i in newly_done])
             pend = col.data.setdefault("pending_digests", {}).setdefault(digest_by, [])
@@ -1062,7 +1071,8 @@ def _safe_eval(col: Collection, it: Dict[str, Any], run_dir: Path, evaluator) ->
 
 
 def _run_digests(col, by, newly_done, summary, limits, package_subject, vault_subject_dir,
-                 digester, emit, say, as_of, policy, now, sleep, wait_default, wait_max) -> None:
+                 digester, emit, say, as_of, policy, now, sleep, wait_default, wait_max,
+                 closed_only: bool = False) -> None:
     digest_dir = (Path(vault_subject_dir) if package_subject and vault_subject_dir is not None
                   else col.runs_dir)
     done = [i for i in col.items.values() if i["state"] in ("noted", "packaged")]
@@ -1072,9 +1082,18 @@ def _run_digests(col, by, newly_done, summary, limits, package_subject, vault_su
     for k in span_keys(by, [i.get("published") for i in done]):
         if not (out_dir / f"{k}.md").exists():
             keys.add(k)
+    deferred: List[str] = []
+    if closed_only:
+        # A span that has not ended yet would be rebuilt by every later run
+        # (each new episode changes its prompt); build it once it is over.
+        deferred = sorted(k for k in keys if not span_closed(by, k, as_of or now().date()))
+        keys -= set(deferred)
+        if deferred:
+            say(f"digests: deferred until the span ends: {', '.join(deferred)}")
     if not keys:
         say("digests: no affected span")
-        col.data.setdefault("pending_digests", {})[by] = []
+        col.data.setdefault("pending_digests", {})[by] = deferred
+        col.save()
         return
     budget = None
     if limits.max_calls is not None:
@@ -1112,7 +1131,7 @@ def _run_digests(col, by, newly_done, summary, limits, package_subject, vault_su
             sleep(wait_s)
     built_keys = {d["span"] for d in summary.digests}
     left = [k for k in left if k not in built_keys]
-    col.data.setdefault("pending_digests", {})[by] = left
+    col.data.setdefault("pending_digests", {})[by] = sorted(set(left) | set(deferred))
     summary.pending_digests = left
     if left and not summary.stop_reason:
         summary.stop_reason = f"--max-calls reached before digests {', '.join(left)}"
@@ -1240,4 +1259,4 @@ __all__ = ["Collection", "CollectionError", "Filters", "Limits", "Locked", "Outc
            "default_digester", "ensure_listing", "estimate_calls", "find_package",
            "listing_built_at", "listing_stale_reason", "load_listing",
            "parse_duration", "render_selection", "render_status", "run_collection",
-           "select_entries", "until_deadline"]
+           "select_entries", "span_closed", "until_deadline"]

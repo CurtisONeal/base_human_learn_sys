@@ -1922,6 +1922,9 @@ def collection_run(
     package: bool = typer.Option(False, "--package", help="Package each finished item "
                                  "into the collection's subject"),
     digest: str = typer.Option(None, "--digest", help="week | month: rebuild affected digests"),
+    closed_spans_only: bool = typer.Option(False, "--closed-spans-only",
+                                           help="Build a week/month digest only once that span "
+                                                "has ended (open spans stay pending)"),
     max_attempts: int = typer.Option(3, "--max-attempts", help="Tries per item before failed"),
     backoff: float = typer.Option(60.0, "--backoff", help="Retry backoff seconds (doubles)"),
     retry_failed: bool = typer.Option(False, "--retry-failed", help="Retry items marked failed"),
@@ -1968,7 +1971,7 @@ def collection_run(
             exhaustion_wait_s=settings.exhaustion_wait_seconds,
             exhaustion_max_wait_s=settings.exhaustion_max_wait_seconds,
             emit=lambda line: print(line, flush=True),
-            say=lambda m: console.print(m, highlight=False, markup=False), as_of=ref)
+            say=lambda m: console.print(m, highlight=False, markup=False), as_of=ref, closed_spans_only=closed_spans_only)
     except cm.Locked as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(3)
