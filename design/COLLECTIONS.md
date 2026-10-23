@@ -280,3 +280,28 @@ The rerun made 0 calls and printed "digests: no affected span". Both digest file
 byte-identical (same md5).
 
 The vault `_index.md` now shows 7 packaged.
+
+## Closed spans only, and the weekly job (2026-10-22)
+
+`collection run … --digest week --closed-spans-only` builds a week or month digest only
+once that span has ended. Open spans stay in `pending_digests`, and the first run after
+they end builds them, once. Without the flag, an open week is rebuilt by every run that
+adds an episode to it, because the prompt hash changes. Each digest's prompt also
+carries the previous span's digest, so backfill oldest-first, and build digests after
+all the notes exist, never interleaved with them.
+
+`scripts/collection_weekly.sh <collection>` runs, in order:
+1. select the last 10 days;
+2. notes and packages;
+3. week digests (closed weeks only);
+4. month digests (closed months only);
+5. `annotate-people`;
+6. status;
+7. a Discord notice plus a copy in the vault inbox.
+
+It runs subscription-only and waits through usage limits. `DRY_RUN=1` checks the
+environment with no model calls. The launchd plist `scripts/launchd/local.aidb-weekly.plist`
+(Mondays 03:10) is **not installed**: installing a scheduled job is the user's step:
+
+    cp scripts/launchd/local.aidb-weekly.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.aidb-weekly.plist
