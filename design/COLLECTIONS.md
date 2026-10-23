@@ -72,8 +72,14 @@ and `timestamps` (`<state>_at`, `last_attempt_at`, `failed_at`).
 | `--dry-run` | print the matches and the estimate; change nothing |
 | `--no-queue`, `--replace`, `--refresh` | record as selected only; drop never-started items that no longer match; re-list the source first (network) |
 
-Selection reads `listing.json` only, so there is **no network** unless you pass
-`--refresh`.
+Selection reads `listing.json`, with **no network**, unless you pass `--refresh` or
+the cached listing is too old for the request: when a dated window (`--last-days`,
+`--until`, or an open-ended `--since`, which ends today) ends after the day
+`listing.json` was built, the source is re-listed first and the printout says why
+(`Listing: re-listed automatically: …`). If that re-list fails (offline, throttled),
+the cached listing is used and the note says so. `--no-refresh` turns this off.
+Limitation: a listing built earlier *today* counts as fresh, so an episode published
+later the same day needs `--refresh`.
 
 The printout shows every match with its state. `packaged*` means a package for that id
 already exists and will be adopted, not rebuilt. The estimate counts only the items

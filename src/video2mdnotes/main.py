@@ -1841,10 +1841,15 @@ def collection_select(
     replace: bool = typer.Option(False, "--replace",
                                  help="Drop never-started queued items that no longer match"),
     refresh: bool = typer.Option(False, "--refresh", help="Re-list the playlist first (network)"),
+    no_refresh: bool = typer.Option(False, "--no-refresh",
+                                    help="Never re-list, even when the cached listing is older "
+                                         "than the requested date window"),
     root: Path = typer.Option(None, "--root", help=COLLECTION_ROOT_HELP),
 ):
-    """Select episodes from the cached listing into the queue. No network
-    (unless --refresh). Items already done keep their state."""
+    """Select episodes from the cached listing into the queue. Re-lists the
+    playlist first (network) with --refresh, or automatically when a dated
+    window ends after the day the cached listing was built (--no-refresh
+    turns that off). Items already done keep their state."""
     from video2mdnotes.core import collection as cm
     from video2mdnotes.core.playlist import parse_date
     col = _load_collection(name, root)
@@ -1854,11 +1859,13 @@ def collection_select(
                        items=items, match=match,
                        min_duration_s=cm.parse_duration(min_duration),
                        max_duration_s=cm.parse_duration(max_duration))
-        entries = (cm.build_listing(col, output_root=settings.output_dir) if refresh
-                   else cm.load_listing(col))
+        entries, note = cm.ensure_listing(col, f, output_root=settings.output_dir,
+                                          refresh=refresh, auto=not no_refresh)
     except (ValueError, re.error) as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(2)
+    if note:
+        console.print(f"[dim]Listing: {note}[/dim]", highlight=False)
     if not entries:
         console.print("[red]No listing yet: run `collection init` (or --refresh)[/red]")
         raise typer.Exit(2)

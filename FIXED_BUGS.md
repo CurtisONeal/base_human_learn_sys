@@ -13,6 +13,18 @@ Newest first. Format: symptom → cause → fix → how we know.
 
 ---
 
+### `collection select --last-days 7` selected 0 new episodes (stale listing)
+- **Symptom:** AIDB phase A (2026-10-21) selected none of the newest episodes; a
+  re-run with `--refresh` found them.
+- **Cause:** `select` read the cached `listing.json` only, and that listing was
+  built on 10-20; nothing compared its age with the requested window.
+- **Fix:** `ensure_listing` re-lists before selecting when a dated window ends after
+  the listing's build day (`listing_stale_reason`), prints why, keeps the cached
+  listing if the re-list fails; `--no-refresh` opts out.
+- **How we know:** `tests/test_collection.py::test_stale_listing_is_relisted_before_select`
+  (listing built 10-20, window to 10-22, a 10-22 episode is found), plus tests that a
+  fresh or undated select stays offline and a failed re-list falls back.
+
 ### One person, two index entries; a judge ranked as an "AI voice" (WP-P5)
 - **Symptom:** after WP-P4, `people/_index.md` and the AI voices table had both
   "Kyo" (ASR garble; the voice lookup confirmed @theo) and "Theo" (model

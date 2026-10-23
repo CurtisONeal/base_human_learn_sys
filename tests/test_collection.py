@@ -414,3 +414,61 @@ def test_count_calls_from_checkpoints(tmp_path):
     assert cm.count_calls(d) == 4
     assert cm.estimate_calls(25 * 60) == 1
     assert cm.estimate_calls(3 * 3600) == 5
+
+
+# --------------------------------------------------------------------------- #
+# Stale listing → automatic re-list before selecting (phase A selected 0 new:
+# the cached listing stopped at 10-20 and the window ended 10-21)
+# --------------------------------------------------------------------------- #
+
+def _age_listing(c, built):
+    p = c.dir / cm.LISTING
+    d = json.loads(p.read_text())
+    d["built_at"] = built
+    p.write_text(json.dumps(d))
+
+
+NEWER = [("DDDDDDDDDDD", "Fresh episode", "2026-10-22", 1200)] + EPS
+
+
+def test_stale_listing_is_relisted_before_select(col, tmp_path):
+    out = tmp_path / "out"
+    _age_listing(col, "2026-10-20T08:00:00")
+    _seed_cache(out, NEWER)
+    f = cm.Filters(last_days=7, as_of=dt.date(2026, 10, 22))
+    assert "older than the window end 2026-10-22" in cm.listing_stale_reason(col, f)
+    entries, note = cm.ensure_listing(col, f, output_root=out,
+                                      list_fn=_list_fn(NEWER), meta_fn=_no_meta)
+    assert note.startswith("re-listed automatically")
+    assert cm.select_entries(entries, f)[0]["id"] == "DDDDDDDDDDD"
+    assert cm.listing_built_at(col).date() == dt.date.today()   # rewritten
+
+
+def test_fresh_listing_or_undated_select_stays_offline(col, tmp_path):
+    def boom(url):
+        raise AssertionError("network: re-listed although the cache was fresh")
+    _age_listing(col, "2026-10-22T08:00:00")
+    f = cm.Filters(last_days=7, as_of=dt.date(2026, 10, 22))
+    assert cm.listing_stale_reason(col, f) is None
+    entries, note = cm.ensure_listing(col, f, output_root=tmp_path / "out", list_fn=boom)
+    assert note is None and len(entries) == 4
+    # no dated window (items / match / limit): never auto re-listed
+    _age_listing(col, "2026-01-01T00:00:00")
+    assert cm.listing_stale_reason(col, cm.Filters(items="1-2")) is None
+    # an open-ended --since window ends today
+    assert cm.listing_stale_reason(col, cm.Filters(since=dt.date(2026, 10, 1)),
+                                   today=dt.date(2026, 10, 22))
+    # --no-refresh
+    assert cm.ensure_listing(col, cm.Filters(since=dt.date(2026, 10, 1)),
+                             output_root=tmp_path / "out", auto=False, list_fn=boom)[1] is None
+
+
+def test_failed_auto_relist_keeps_cached_listing(col, tmp_path):
+    def offline(url):
+        raise OSError("network unreachable")
+    _age_listing(col, "2026-10-20T08:00:00")
+    f = cm.Filters(last_days=7, as_of=dt.date(2026, 10, 22))
+    entries, note = cm.ensure_listing(col, f, output_root=tmp_path / "out", list_fn=offline)
+    assert len(entries) == 4 and "using the cached listing" in note
+    with pytest.raises(OSError):   # an explicit --refresh still fails loudly
+        cm.ensure_listing(col, f, output_root=tmp_path / "out", refresh=True, list_fn=offline)

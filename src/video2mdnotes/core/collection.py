@@ -317,6 +317,58 @@ def load_listing(col: Collection) -> List[Dict[str, Any]]:
     return json.loads(p.read_text(encoding="utf-8")).get("entries", [])
 
 
+def listing_built_at(col: Collection) -> Optional[dt.datetime]:
+    p = col.dir / LISTING
+    if not p.exists():
+        return None
+    raw = json.loads(p.read_text(encoding="utf-8")).get("built_at")
+    try:
+        return dt.datetime.fromisoformat(raw) if raw else None
+    except ValueError:
+        return None
+
+
+def listing_stale_reason(col: Collection, f: "Filters",
+                         today: Optional[dt.date] = None) -> Optional[str]:
+    """Why the cached listing cannot answer `f`, or None. A dated window that
+    ends after the day the listing was built may be missing newer episodes
+    (phase A selected 0 new because the listing stopped a day early)."""
+    if not (col.dir / LISTING).exists():
+        return "no listing yet"
+    end = f.until or ((today or dt.date.today()) if f.since else None)
+    if end is None:
+        return None
+    built = listing_built_at(col)
+    if built is None:
+        return "listing has no build time"
+    if built.date() < end:
+        return f"listing built {built.date()} is older than the window end {end}"
+    return None
+
+
+def ensure_listing(col: Collection, f: "Filters", *, output_root: Path,
+                   refresh: bool = False, auto: bool = True,
+                   today: Optional[dt.date] = None,
+                   **build_kw: Any) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+    """The listing to select from, re-listed first when asked (`refresh`) or
+    when the cache is older than the requested window (`auto`). Returns
+    (entries, note); on a failed automatic refresh the cached listing is kept
+    and the note says so."""
+    if refresh:
+        return build_listing(col, output_root=output_root, **build_kw), "re-listed (--refresh)"
+    reason = listing_stale_reason(col, f, today=today) if auto else None
+    if not reason:
+        return load_listing(col), None
+    try:
+        return (build_listing(col, output_root=output_root, **build_kw),
+                f"re-listed automatically: {reason}")
+    except Exception as exc:  # network down / throttled: fall back to the cache
+        cached = load_listing(col)
+        if not cached:
+            raise
+        return cached, f"{reason}; automatic re-list failed ({exc}); using the cached listing"
+
+
 # --------------------------------------------------------------------------- #
 # Selection
 # --------------------------------------------------------------------------- #
@@ -1185,6 +1237,7 @@ def _hms(seconds: Optional[float]) -> str:
 
 __all__ = ["Collection", "CollectionError", "Filters", "Limits", "Locked", "Outcome",
            "RunSummary", "SubprocessRunner", "apply_selection", "build_listing", "count_calls",
-           "default_digester", "estimate_calls", "find_package", "load_listing",
+           "default_digester", "ensure_listing", "estimate_calls", "find_package",
+           "listing_built_at", "listing_stale_reason", "load_listing",
            "parse_duration", "render_selection", "render_status", "run_collection",
            "select_entries", "until_deadline"]
