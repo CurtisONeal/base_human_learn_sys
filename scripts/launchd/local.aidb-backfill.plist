@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>local.aidb-backfill</string>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/s_admin/Documents/agent_set_up/repos/base_human_learn_sys</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/s_admin/Documents/agent_set_up/repos/base_human_learn_sys/scripts/collection_backfill.sh</string>
+    <string>ai_daily_brief</string>
+    <string>2026-01-01</string>
+    <string>2026-10-24 07:05</string>
+  </array>
+
+  <!-- Every 2 h. The script does nothing before Sat 2026-10-24 07:05 (just after
+       the weekly limit reset), nothing while a run holds the collection lock, and
+       unloads this job once the backfill is done. A tick after a crash or
+       restart resumes from the manifest; finished items are never redone. -->
+  <key>StartInterval</key>
+  <integer>7200</integer>
+
+  <key>StandardOutPath</key>
+  <string>/Users/s_admin/Library/Logs/aidb-backfill.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/s_admin/Library/Logs/aidb-backfill.err</string>
+</dict>
+</plist>

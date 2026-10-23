@@ -26,6 +26,15 @@ VAULT_INBOX="$HOME/Documents/obsidian_vault/syncing_vault2_clean_2026/000_inbox_
 
 step() { echo "== $(date '+%F %T') $*" >>"$LOG"; "$@" >>"$LOG" 2>&1; local rc=$?; echo "exit=$rc" >>"$LOG"; return $rc; }
 
+# A backfill (or any run) holding the collection already covers this week's
+# episodes: step aside instead of failing on the lock.
+LOCK="previous_run_results/collections/$NAME/collection.lock"
+if [ -z "${DRY_RUN:-}" ] && [ -f "$LOCK" ] && kill -0 "$(cat "$LOCK" 2>/dev/null)" 2>/dev/null; then
+  echo "== $(date '+%F %T') skipped: collection locked by pid $(cat "$LOCK") (backfill running)" >>"$LOG"
+  hermes send --to discord:#general "${NAME} weekly: skipped, another run holds the collection (backfill); it covers this week's episodes." >>"$LOG" 2>&1
+  exit 0
+fi
+
 if [ -n "${DRY_RUN:-}" ]; then
   step claude --version
   step $PY collection select "$NAME" --last-days 10 --order newest --dry-run
