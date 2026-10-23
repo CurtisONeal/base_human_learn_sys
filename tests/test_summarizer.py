@@ -146,6 +146,9 @@ def test_claude_cli_backend_disables_tools_and_strips_keys(
         assert "--disallowedTools" in argv
         assert "Skill" in argv[argv.index("--disallowedTools") + 1]
         assert "--system-prompt-file" in argv
+        # No tool or MCP definitions reach the model (cost + injection surface).
+        assert argv[argv.index("--tools") + 1] == ""
+        assert "--strict-mcp-config" in argv
 
         kwargs = mock_run.call_args.kwargs
         # Transcript goes in on stdin, not argv (a full transcript blows ARG_MAX).

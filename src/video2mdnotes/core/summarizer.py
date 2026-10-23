@@ -158,6 +158,13 @@ def _complete_claude_cli(model: str, system_prompt_file: Path, user_message: str
                 "--model", alias,
                 "--system-prompt-file", str(system_prompt_file),
                 "--disallowedTools", settings.claude_cli_disallowed_tools,
+                # No tools at all, and none of the user's MCP connectors: their
+                # definitions cost ~20k input tokens per call (measured 20,250 vs
+                # 587 for a one-line prompt), and --disallowedTools does not
+                # remove MCP tools (Gmail, Drive, ...) from an agent that is
+                # reading untrusted transcript text.
+                "--tools", "",
+                "--strict-mcp-config",
             ],
             input=user_message,
             capture_output=True,

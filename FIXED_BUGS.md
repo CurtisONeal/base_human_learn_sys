@@ -13,6 +13,19 @@ Newest first. Format: symptom → cause → fix → how we know.
 
 ---
 
+### Every summary call carried ~20k tokens of unused tool and MCP definitions
+- **Symptom:** a 25-minute AIDB episode's call read about 37k input tokens, but its
+  prompt was only about 9k tokens.
+- **Cause:** `claude -p` loads every built-in tool and all of the user's MCP
+  connectors (Gmail, Drive, Dropbox, Chrome ...). `--disallowedTools` blocks the
+  built-ins by name but leaves the MCP tools visible, so an agent reading
+  untrusted transcript text could see them.
+- **Fix:** the summary call adds `--tools ""` and `--strict-mcp-config`. The
+  web-lookup call already restricts itself to WebSearch and WebFetch.
+- **How we know:** a one-line prompt through `_complete_claude_cli` went from
+  20,250 to 601 input tokens, measured from the CLI session log on 2026-10-22.
+  `tests/test_summarizer.py` asserts both flags.
+
 ### `collection select --last-days 7` selected 0 new episodes (stale listing)
 - **Symptom:** AIDB phase A (2026-10-21) selected none of the newest episodes; a
   re-run with `--refresh` found them.
