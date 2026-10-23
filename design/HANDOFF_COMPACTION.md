@@ -3,6 +3,7 @@
 Read with `HANDOFF_NEXT_SESSION.md` (repo state, setup, track) — this file adds the things a summary tends to lose.
 
 ## In flight right now
+- **Update 2026-10-22 afternoon:** phase B finished. 17 episodes processed, all P1–P7 PASS. 25 packaged in total, 0 failed. Weeks W39–W43 and the 2026-10 month digest are built, links pass. `annotate-people` stopped at the subscription session limit (resets 6 pm ET); finished batches are saved, so re-run `annotate-people ai_daily_brief --max-web-calls 5` to continue. Approved items 1 and 2 below are done: auto-refresh (`375a664`) and the originals index (`previous_run_results/T9_anthropic_4h_course/ORIGINALS_INDEX.md`).
 - **Phase B** (background shell, started from the MAIN session, subscription only): `collection select ai_daily_brief --last-days 30 --as-of 2026-10-22 --order newest --replace --refresh` → `collection run … --package --digest week --usd-cap 0` → `digest --by month 2026-10` → `annotate-people ai_daily_brief --max-web-calls 5` → status. Log: `previous_run_results/collections/ai_daily_brief/phaseB.log`. It waits on usage limits by itself (ON_EXHAUSTION=wait). Report: episodes processed/failed, evals, digests (weeks + 2026-10), people/voices/sources counts.
 - Phase A done: 6 older eps re-summarized (People + Sources), all P1–P7 PASS, re-packaged 0 broken; 10-21 episode added; W42 165 / W43 155 citations, links pass.
 
