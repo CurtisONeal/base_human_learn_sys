@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>local.aidb-weekly</string>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/s_admin/Documents/agent_set_up/repos/base_human_learn_sys</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/s_admin/Documents/agent_set_up/repos/base_human_learn_sys/scripts/collection_weekly.sh</string>
+    <string>ai_daily_brief</string>
+  </array>
+
+  <!-- Mondays 03:10: the ISO week has ended, so its digest is final, and the
+       run is off-hours (no shared usage window with interactive work).
+       No RunAtLoad: loading must not start a model run. -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Weekday</key><integer>1</integer>
+    <key>Hour</key><integer>3</integer>
+    <key>Minute</key><integer>10</integer>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>/Users/s_admin/Library/Logs/aidb-weekly.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/s_admin/Library/Logs/aidb-weekly.err</string>
+</dict>
+</plist>
